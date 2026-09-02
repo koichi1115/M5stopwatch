@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+*.bin
+*.elf
+__pycache__/
+.DS_Store
+arduino_sketch/

@@ -1,0 +1,367 @@
+// M5Stack StopWatch デジタルバッジ
+//  - IMU で重力方向を検出し、どう回しても顔が正立する
+//  - まっくろくろすけ風の目がキョロキョロ / まばたき / 眠る / 驚く / 喜ぶ
+//  - 常時点灯 (AMOLED なので黒背景ならそれなりに省電力)、動きが無いと段階的に省電力へ
+//
+// 操作 (BtnA = GPIO2, BtnB = GPIO1。物理的にどちらがどれかは実機で確認):
+//   BtnA クリック      : ステータス表示 (電池 / 姿勢 / IMU 生値)
+//   BtnA ダブルクリック : 回転方向を反転 (傾けたときに顔が逆に回るとき)
+//   BtnA 長押し        : 明るさを切り替え
+//   BtnB クリック      : 起こす (寝ていたら) / ウインクっぽく驚かせる
+//   BtnB ダブルクリック : 自動で寝る機能の ON/OFF
+//   BtnB 長押し        : 今の向きを「正立」として記憶 (較正)
+//   タップ             : 喜ぶ。触り続けると指を目で追う
+
+#include <Arduino.h>
+#include <M5Unified.h>
+#include <Preferences.h>
+#include <esp_sleep.h>
+#include <driver/rtc_io.h>
+
+#include "config.h"
+#include "orientation.h"
+#include "face.h"
+
+// ------------------------------------------------------------
+static M5Canvas screen(&M5.Display);
+static LovyanGFX* out = &screen;   // PSRAM が無いときは M5.Display に直接描く
+static Face face;
+static OrientationTracker orient;
+static MotionDetector motion;
+static Preferences prefs;
+
+static uint8_t brightnessIndex = DEFAULT_BRIGHTNESS_INDEX;
+static bool autoSleepEnabled = true;
+static uint32_t statusUntil = 0;
+static uint32_t lastFrameMs = 0;
+static uint32_t lastLoopUs = 0;
+static uint32_t bootMs = 0;
+static bool lowClock = false;
+static int screenW = 468, screenH = 468;
+static uint16_t furSeed = 12345;
+static uint32_t sleepEnteredMs = 0;
+
+static constexpr gpio_num_t WAKE_BUTTON_1 = GPIO_NUM_1;
+static constexpr gpio_num_t WAKE_BUTTON_2 = GPIO_NUM_2;
+
+// ------------------------------------------------------------
+static void loadSettings() {
+  prefs.begin("badge", false);
+  orient.setSign(prefs.getChar("sign", 1));
+  orient.setOffset(prefs.getFloat("offset", 0.0f));
+  brightnessIndex = prefs.getUChar("bri", DEFAULT_BRIGHTNESS_INDEX);
+  if (brightnessIndex >= sizeof(BRIGHTNESS_LEVELS)) brightnessIndex = DEFAULT_BRIGHTNESS_INDEX;
+  autoSleepEnabled = prefs.getBool("asleep", true);
+}
+
+static void saveOrientation() {
+  prefs.putChar("sign", orient.sign());
+  prefs.putFloat("offset", orient.offset());
+}
+
+static void vibrate(uint8_t level, uint32_t ms) {
+  M5.Power.setVibration(level);
+  delay(ms);
+  M5.Power.setVibration(0);
+}
+
+static void applyBrightness() {
+  uint8_t b = BRIGHTNESS_LEVELS[brightnessIndex];
+  if (face.isSleeping()) b = SLEEP_BRIGHTNESS;
+  else if (face.isDrowsy()) b = (uint8_t)((uint32_t)b * DROWSY_BRIGHTNESS_SCALE_PERCENT / 100);
+  if (b < 4) b = 4;
+  if (M5.Display.getBrightness() != b) M5.Display.setBrightness(b);
+}
+
+static void setLowClock(bool enable) {
+  if (!LOW_CPU_CLOCK_WHILE_SLEEPING || enable == lowClock) return;
+  lowClock = enable;
+  setCpuFrequencyMhz(enable ? 80 : 240);
+}
+
+// ------------------------------------------------------------
+// 深い眠り: 画面を消して deep sleep。ボタン (GPIO1/2) または定期タイマで起きる。
+static void enterDeepSleep() {
+  Serial.println("[power] entering deep sleep");
+  Serial.flush();
+  M5.Display.sleep();
+  M5.Display.waitDisplay();
+  M5.Imu.sleep();
+
+  const uint64_t mask = (1ULL << WAKE_BUTTON_1) | (1ULL << WAKE_BUTTON_2);
+  esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+  for (gpio_num_t pin : {WAKE_BUTTON_1, WAKE_BUTTON_2}) {
+    rtc_gpio_init(pin);
+    rtc_gpio_set_direction(pin, RTC_GPIO_MODE_INPUT_ONLY);
+    rtc_gpio_pulldown_dis(pin);
+    rtc_gpio_pullup_en(pin);
+  }
+  esp_sleep_enable_ext1_wakeup(mask, ESP_EXT1_WAKEUP_ANY_LOW);
+  if (DEEP_SLEEP_MOTION_CHECK_SEC > 0) {
+    esp_sleep_enable_timer_wakeup((uint64_t)DEEP_SLEEP_MOTION_CHECK_SEC * 1000000ULL);
+  }
+  esp_deep_sleep_start();
+}
+
+// タイマ起床時: 少しの間 IMU を見て、動いていなければそのまま寝直す
+static void motionCheckAfterTimerWake() {
+  if (!M5.Imu.isEnabled()) return;
+  const uint32_t start = millis();
+  bool moved = false;
+  float ax, ay, az, gx, gy, gz;
+  while (millis() - start < DEEP_SLEEP_MOTION_CHECK_WINDOW_MS) {
+    if (M5.Imu.update()) {
+      M5.Imu.getAccel(&ax, &ay, &az);
+      M5.Imu.getGyro(&gx, &gy, &gz);
+      motion.update(ax, ay, az, gx, gy, gz, millis());
+      if (millis() - start > 200 && motion.lastMotionMs() > start + 200) { moved = true; break; }
+    }
+    delay(5);
+  }
+  Serial.printf("[power] timer wake, moved=%d\n", moved);
+  if (!moved) enterDeepSleep();
+}
+
+// ------------------------------------------------------------
+static void drawFur(float angleDeg) {
+  // 画面の縁に生える毛。顔と一緒に回す。
+  const float cx = screenW / 2.0f, cy = screenH / 2.0f;
+  const float R = (screenW < screenH ? screenW : screenH) / 2.0f + 2.0f;
+  uint32_t seed = furSeed;
+  auto rnd = [&seed]() { seed = seed * 1103515245u + 12345u; return (seed >> 16) & 0x7FFF; };
+  const int hairs = FUR_COUNT;
+  for (int i = 0; i < hairs; ++i) {
+    const float a = (angleDeg + i * (360.0f / hairs) + (rnd() % 30) / 10.0f) * 0.01745329f;
+    const float len = FUR_MIN_LEN + (rnd() % (FUR_MAX_LEN - FUR_MIN_LEN + 1));
+    const float w = 1.4f + (rnd() % 10) / 6.0f;
+    const float x0 = cx + cosf(a) * R, y0 = cy + sinf(a) * R;
+    const float x1 = cx + cosf(a) * (R - len), y1 = cy + sinf(a) * (R - len);
+    out->drawWideLine(x0, y0, x1, y1, w, COLOR_FUR);
+    out->fillCircle((int)x1, (int)y1, (int)(w * 0.9f), COLOR_FUR_TIP);
+  }
+}
+
+static void drawStatus(uint32_t now) {
+  M5Canvas& sp = face.sprite();
+  const int w = sp.width();
+  sp.setTextDatum(top_left);
+  sp.setFont(&fonts::Font2);
+  sp.setTextSize(1);
+  sp.setTextColor(COLOR_UI);
+
+  const int32_t bat = M5.Power.getBatteryLevel();
+  const auto chg = M5.Power.isCharging();
+  const char* chgs = (chg == m5::Power_Class::is_charging) ? "CHG" : (chg == m5::Power_Class::is_discharging ? "BAT" : "??");
+  char line[64];
+  int y = 8;
+  const int x = w / 2 - 110;
+  snprintf(line, sizeof(line), "%s %ld%%  %dmV", chgs, (long)bat, (int)M5.Power.getBatteryVoltage());
+  sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "ANG %6.1f  raw %6.1f  %s", orient.displayAngle(), orient.rawAngle(), orient.reliable() ? "ok" : "flat");
+  sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "sign %+d  offset %6.1f", orient.sign(), orient.offset());
+  sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "gx %+5.2f gy %+5.2f |a| %4.2f", orient.screenGx(), orient.screenGy(), orient.magnitudeG());
+  sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "bri %d/%d  autosleep %s  idle %lus", brightnessIndex + 1, (int)sizeof(BRIGHTNESS_LEVELS),
+           autoSleepEnabled ? "on" : "off", (unsigned long)(motion.idleMs(now) / 1000));
+  sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "up %lus  imu %s  fps %d", (unsigned long)((now - bootMs) / 1000),
+           M5.Imu.isEnabled() ? "ok" : "NONE", (int)(1000 / (FRAME_INTERVAL_AWAKE_MS ? FRAME_INTERVAL_AWAKE_MS : 1)));
+  sp.drawString(line, x, y);
+
+  // 電池アーク (下部, 左から右へ伸びる)
+  if (bat >= 0) {
+    const float cx = w / 2.0f, cy = w / 2.0f;
+    const float r = w / 2.0f - 8;
+    const uint16_t col = bat < 20 ? TFT_RED : COLOR_UI_ACCENT;
+    const int segs = 40;
+    const float a0 = 150.0f, a1 = 150.0f - 120.0f * bat / 100.0f;
+    float px = 0, py = 0;
+    for (int k = 0; k <= segs; ++k) {
+      const float t = (a0 + (a1 - a0) * k / segs) * 0.01745329f;
+      const float xx = cx + r * cosf(t), yy = cy + r * sinf(t);
+      if (k) sp.drawWideLine(px, py, xx, yy, 3.0f, col);
+      px = xx; py = yy;
+    }
+  }
+}
+
+static void render(uint32_t now) {
+  const float angle = orient.displayAngle();
+  face.draw();
+  if ((int32_t)(now - statusUntil) < 0) drawStatus(now);
+
+  if (out != &screen) M5.Display.startWrite();
+  out->fillScreen(TFT_BLACK);
+  drawFur(angle);
+  if (FACE_ANTIALIAS) face.sprite().pushRotatedWithAA(out, angle, COLOR_TRANSPARENT);
+  else face.sprite().pushRotateZoom(out, screenW / 2.0f, screenH / 2.0f, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
+  if (out == &screen) screen.pushSprite(0, 0);
+  else M5.Display.endWrite();
+}
+
+// ------------------------------------------------------------
+static void handleButtons(uint32_t now) {
+  // ---- BtnA ----
+  if (M5.BtnA.wasDoubleClicked()) {
+    orient.flipSign();
+    saveOrientation();
+    statusUntil = now + STATUS_OVERLAY_MS;
+    vibrate(150, 60);
+    Serial.printf("[cfg] rotation sign -> %+d\n", orient.sign());
+  } else if (M5.BtnA.wasHold()) {
+    brightnessIndex = (brightnessIndex + 1) % sizeof(BRIGHTNESS_LEVELS);
+    prefs.putUChar("bri", brightnessIndex);
+    statusUntil = now + 1500;
+    vibrate(120, 40);
+    Serial.printf("[cfg] brightness -> %d\n", BRIGHTNESS_LEVELS[brightnessIndex]);
+  } else if (M5.BtnA.wasClicked()) {
+    statusUntil = now + STATUS_OVERLAY_MS;
+    motion.touch(now);
+  }
+
+  // ---- BtnB ----
+  if (M5.BtnB.wasDoubleClicked()) {
+    autoSleepEnabled = !autoSleepEnabled;
+    prefs.putBool("asleep", autoSleepEnabled);
+    statusUntil = now + STATUS_OVERLAY_MS;
+    vibrate(150, 60);
+    Serial.printf("[cfg] autosleep -> %d\n", autoSleepEnabled);
+  } else if (M5.BtnB.wasHold()) {
+    if (orient.calibrate()) {
+      saveOrientation();
+      vibrate(200, 80); delay(80); vibrate(200, 80);
+      Serial.printf("[cfg] calibrated: offset=%.1f sign=%+d\n", orient.offset(), orient.sign());
+    } else {
+      vibrate(90, 250);
+      Serial.println("[cfg] calibration failed: hold the device upright (screen vertical)");
+    }
+    statusUntil = now + STATUS_OVERLAY_MS;
+  } else if (M5.BtnB.wasClicked()) {
+    motion.touch(now);
+  }
+}
+
+// ------------------------------------------------------------
+void setup() {
+  auto cfg = M5.config();
+  cfg.internal_imu = true;
+  cfg.internal_rtc = true;
+  cfg.clear_display = true;
+  M5.begin(cfg);
+  bootMs = millis();
+
+  Serial.printf("\n[boot] M5Unified board=%d imu=%d psram=%u\n", (int)M5.getBoard(), (int)M5.Imu.getType(), (unsigned)ESP.getPsramSize());
+
+  M5.BtnA.setHoldThresh(BUTTON_HOLD_MS);
+  M5.BtnB.setHoldThresh(BUTTON_HOLD_MS);
+  loadSettings();
+
+  const auto cause = esp_sleep_get_wakeup_cause();
+  if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+    M5.Display.setBrightness(0);
+    motionCheckAfterTimerWake();   // 動いていなければ戻ってこない
+  }
+
+  M5.Display.setRotation(0);
+  screenW = M5.Display.width();
+  screenH = M5.Display.height();
+  screen.setPsram(true);
+  screen.setColorDepth(16);
+  if (!screen.createSprite(screenW, screenH)) {
+    Serial.println("[boot] screen sprite alloc failed (PSRAM?) - drawing directly");
+    out = &M5.Display;
+  }
+  out->setPivot(screenW / 2.0f, screenH / 2.0f);
+  if (!face.begin()) {
+    Serial.println("[boot] face sprite alloc failed");
+  }
+  furSeed = (uint16_t)esp_random();
+  randomSeed(esp_random());
+
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setBrightness(BRIGHTNESS_LEVELS[brightnessIndex]);
+  motion.touch(millis());
+  if (VIBRATE_ON_BOOT && cause != ESP_SLEEP_WAKEUP_TIMER) vibrate(160, 70);
+  lastLoopUs = micros();
+  Serial.printf("[boot] display %dx%d, sign=%+d offset=%.1f\n", screenW, screenH, orient.sign(), orient.offset());
+}
+
+void loop() {
+  M5.update();
+  const uint32_t now = millis();
+  const uint32_t nowUs = micros();
+  float dt = (nowUs - lastLoopUs) * 1e-6f;
+  lastLoopUs = nowUs;
+  if (dt > 0.2f) dt = 0.2f;
+
+  // ---- IMU ----
+  if (M5.Imu.isEnabled() && M5.Imu.update()) {
+    float ax, ay, az, gx, gy, gz;
+    M5.Imu.getAccel(&ax, &ay, &az);
+    M5.Imu.getGyro(&gx, &gy, &gz);
+    orient.update(ax, ay, az, dt);
+    motion.update(ax, ay, az, gx, gy, gz, now);
+  }
+
+  // ---- 入力 ----
+  handleButtons(now);
+
+  FaceInput in{};
+  in.dt = dt;
+  in.now = now;
+  in.shaken = motion.takeShake();
+  in.autoSleepEnabled = autoSleepEnabled;
+
+  if (M5.Touch.isEnabled() && M5.Touch.getCount() > 0) {
+    const auto& t = M5.Touch.getDetail(0);
+    if (t.wasClicked()) in.tapped = true;
+    if (t.isPressed()) {
+      in.touching = true;
+      motion.touch(now);
+      // タッチ座標 → 顔ローカル座標 (顔の回転を打ち消す)
+      const float a = -orient.displayAngle() * OrientationTracker::kDegToRad;
+      const float dx = t.x - screenW / 2.0f, dy = t.y - screenH / 2.0f;
+      const float lx = dx * cosf(a) - dy * sinf(a);
+      const float ly = dx * sinf(a) + dy * cosf(a);
+      const float R = screenW / 2.0f * 0.75f;
+      in.touchGazeX = lx / R;
+      in.touchGazeY = ly / R;
+    }
+  }
+  if (in.tapped) motion.touch(now);
+  in.idleMs = motion.idleMs(now);
+  in.moving = in.idleMs < 300;
+
+  face.update(in);
+
+  // ---- 電源まわり ----
+  applyBrightness();
+  setLowClock(face.isSleeping());
+  if (face.isSleeping()) {
+    if (sleepEnteredMs == 0) sleepEnteredMs = now;
+    if (DEEP_SLEEP_AFTER_MS > 0 && autoSleepEnabled && (now - sleepEnteredMs) >= DEEP_SLEEP_AFTER_MS && (int32_t)(now - statusUntil) >= 0) {
+      enterDeepSleep();
+    }
+  } else {
+    sleepEnteredMs = 0;
+  }
+
+  // ---- 描画 ----
+  const uint32_t interval = face.isSleeping() ? FRAME_INTERVAL_SLEEP_MS : (face.isDrowsy() ? FRAME_INTERVAL_DROWSY_MS : FRAME_INTERVAL_AWAKE_MS);
+  if (now - lastFrameMs >= interval) {
+    lastFrameMs = now;
+    render(now);
+  } else {
+    delay(1);
+  }
+
+  // ---- ログ (ステータス表示中は 2Hz で姿勢を吐く) ----
+  static uint32_t lastLog = 0;
+  if ((int32_t)(now - statusUntil) < 0 && now - lastLog > 500) {
+    lastLog = now;
+    Serial.printf("[imu] gx=%+.2f gy=%+.2f |a|=%.2f angle=%.1f mood=%d idle=%lu\n", orient.screenGx(), orient.screenGy(),
+                  orient.magnitudeG(), orient.displayAngle(), (int)face.mood(), (unsigned long)in.idleMs);
+  }
+}
