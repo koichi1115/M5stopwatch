@@ -17,6 +17,7 @@ struct FaceInput {
   float touchGazeY;
   uint32_t idleMs;       // 最後に動いてからの時間
   bool autoSleepEnabled;
+  float proximity;       // 0 = 何もない .. 1 = 指が触れる直前 (近接電極が無ければ常に 0)
 };
 
 class Face {
@@ -89,6 +90,13 @@ public:
       case Mood::Awake:
         targetOpen = 1.0f;
         if ((int32_t)(in.now - _wakeUntil) < 0) targetOpen = 0.6f;
+        if (in.proximity > 0.02f) {
+          // 何か近づいてくる: 目を見開いて瞳孔が開く。触れる直前は少し身構えて細目に
+          const float p = in.proximity;
+          targetEyeScale = 1.0f + 0.10f * p;
+          targetPupilScale = (p < 0.7f) ? 1.0f + 0.25f * p : 1.175f - 0.55f * (p - 0.7f);
+          if (p > 0.8f) targetOpen = 1.0f - 0.45f * (p - 0.8f) / 0.2f;
+        }
         break;
       case Mood::Drowsy:
         targetOpen = 0.42f + 0.10f * sinf(_time * 1.3f);
@@ -135,6 +143,11 @@ public:
       _gazeTargetX = clampf(in.touchGazeX, -1.0f, 1.0f);
       _gazeTargetY = clampf(in.touchGazeY, -1.0f, 1.0f);
       _nextGaze = in.now + 400;
+    } else if (in.proximity > 0.15f && _mood == Mood::Awake) {
+      // 近づいてくるものを見つめる (方向は分からないので正面〜少し上)
+      _gazeTargetX += (0.0f - _gazeTargetX) * clamp01(dt * 6.0f);
+      _gazeTargetY += (-0.15f - _gazeTargetY) * clamp01(dt * 6.0f);
+      _nextGaze = in.now + 300;
     } else if (_mood == Mood::Surprised) {
       // 小刻みに震える
       _gazeTargetX = (random(200) - 100) / 900.0f;

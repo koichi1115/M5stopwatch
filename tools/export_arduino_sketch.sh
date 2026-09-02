@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 out="arduino_sketch/M5StopWatchBadge"
 rm -rf "$out"
 mkdir -p "$out"
-cp src/config.h src/orientation.h src/face.h "$out/"
+cp src/config.h src/orientation.h src/face.h src/proximity.h "$out/"
 # main.cpp を .ino に。Arduino IDE では <Arduino.h> は暗黙 include なので残しても問題ない。
 cp src/main.cpp "$out/M5StopWatchBadge.ino"
 echo "created: $out"

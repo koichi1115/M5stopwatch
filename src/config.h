@@ -92,3 +92,16 @@ constexpr uint32_t BUTTON_HOLD_MS = 1200;          // 長押し判定
 
 // 起動時の挨拶 (バイブ) を鳴らすか
 constexpr bool VIBRATE_ON_BOOT = true;
+
+// ============================================================
+// 6. 近接検知 (指が近づいたのを感じる) - 要: Grove ポートに電極を接続
+// ============================================================
+// 本体に近接センサーは無い。ESP32-S3 のタッチセンサーを Grove の空きピンで使う。
+// 電極を繋いでから true にする。詳細は README「指が近づくのを感じる」。
+constexpr bool PROXIMITY_ENABLED = false;
+constexpr uint8_t PROXIMITY_TOUCH_PIN = 10;        // Grove (HY2.0-4P) の SDA ピン = GPIO10 (T10)。SCL 側なら 11
+constexpr uint32_t PROXIMITY_READ_INTERVAL_MS = 20;
+constexpr float PROXIMITY_NEAR_RATIO = 1.015f;      // 基準値からこの比率以上で「近い」(電極次第。ステータス表示で ratio を見て調整)
+constexpr float PROXIMITY_CLOSE_RATIO = 1.06f;      // この比率で「触れる直前」
+constexpr float PROXIMITY_BASELINE_TRACK = 0.01f;   // 基準値の追従速度 (1 回の読み取りあたり)
+
