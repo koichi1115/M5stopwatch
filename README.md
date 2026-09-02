@@ -91,6 +91,8 @@ pio device monitor                # シリアルログ (115200bps, USB CDC)
 6. **fps**: ステータス表示中に動きがカクつくなら `config.h` の `FACE_ANTIALIAS = false`、それでも重ければ `FACE_SIZE` を小さく。
 7. **タッチ座標**: 触った場所を目が追うか。ズレるなら `main.cpp` のタッチ→顔座標変換の `R` を調整。
 8. **深い眠り**: 90 秒静止で寝る → 30 分後に画面 OFF → ボタンで復帰 することを確認。
+   画面 OFF は「輝度 0 + IO エキスパンダで OLED/タッチのリセットを assert」で実現しているので、
+   復帰後に画面やタッチが死んでいたら `main.cpp` の `enterDeepSleep()` のリセット部分を外す。
    復帰しない場合は `config.h` の `DEEP_SLEEP_AFTER_MS = 0` で無効化 (電池は減りやすくなる)。
 9. **電池の持ち**: 下記参照。実測してから `DROWSY_AFTER_MS` 等を調整。
 

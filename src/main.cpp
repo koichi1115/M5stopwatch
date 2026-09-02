@@ -14,6 +14,7 @@
 
 #include <Arduino.h>
 #include <M5Unified.h>
+#include <utility/M5IOE1_Class.hpp>
 #include <Preferences.h>
 #include <esp_sleep.h>
 #include <driver/rtc_io.h>
@@ -84,9 +85,17 @@ static void setLowClock(bool enable) {
 static void enterDeepSleep() {
   Serial.println("[power] entering deep sleep");
   Serial.flush();
-  M5.Display.sleep();
+  M5.Display.sleep();            // 輝度 0 (フレームバッファ経由だと sleep-in は届かない)
   M5.Display.waitDisplay();
   M5.Imu.sleep();
+  if (M5.getBoard() == m5::board_t::board_M5StopWatch) {
+    // M5IOE1: IO5 = OLED RST, IO4 = TP RST (M5GFX の初期化手順より)。
+    // リセットを assert したまま眠り、起動時の M5GFX 自動検出で解除・再初期化される。
+    auto& ioe = M5.getIOExpander(0);
+    ioe.digitalWrite(m5::M5IOE1_Class::gpio5, false);
+    ioe.digitalWrite(m5::M5IOE1_Class::gpio4, false);
+    delay(5);
+  }
 
   const uint64_t mask = (1ULL << WAKE_BUTTON_1) | (1ULL << WAKE_BUTTON_2);
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
