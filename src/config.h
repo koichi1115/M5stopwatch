@@ -131,10 +131,14 @@ constexpr uint8_t SOUND_ES8311_PGA_GAIN = 4;     // ES8311 のアナログ PGA �
 constexpr float SOUND_FLOOR_RISE_RATE = 0.005f;         // 背景フロアが上がる速さ (静かなとき, 1 ブロックあたり)
 constexpr float SOUND_FLOOR_RISE_RATE_ACTIVE = 0.0002f; // 音がしている間 (長い曲でもフロアが追いつかないよう極小)
 // 急な大きい音
-constexpr float SOUND_LOUD_MIN_DB = -32.0f;          // これより小さい音では驚かない [dBFS]
-constexpr float SOUND_LOUD_ABOVE_FLOOR_DB = 14.0f;   // 背景よりこれだけ大きい
-constexpr float SOUND_LOUD_RISE_DB = 8.0f;          // 直前よりこれだけ急に上がった
-constexpr uint32_t SOUND_LOUD_REFRACTORY_MS = 2500;  // 連続で驚かない時間
+constexpr float SOUND_LOUD_MIN_DB = -24.0f;          // これより小さい音では驚かない [dBFS]
+constexpr float SOUND_LOUD_ABOVE_FLOOR_DB = 20.0f;   // 背景よりこれだけ大きい
+constexpr float SOUND_LOUD_RISE_DB = 12.0f;          // 直前よりこれだけ急に上がった
+constexpr uint32_t SOUND_LOUD_REFRACTORY_MS = 6000;  // 連続で驚かない時間
+// 自分の出す音・衝撃で驚かないための抑止 (マイクは筐体内なのでバイブやタッチ、持ち替えの衝撃を拾う)
+constexpr uint32_t SOUND_SUPPRESS_AFTER_VIBRATION_MS = 400;  // バイブ終了後
+constexpr uint32_t SOUND_SUPPRESS_AFTER_TOUCH_MS = 500;      // タッチ / ボタン操作後
+constexpr uint32_t SOUND_SUPPRESS_MOTION_MS = 400;           // IMU が動きを検知してからこの間の大きい音は「衝撃」とみなして無視
 // 音楽
 constexpr float SOUND_ACTIVE_ABOVE_FLOOR_DB = 6.0f;  // 「音がしている」判定
 constexpr float SOUND_ACTIVE_MIN_DB = -55.0f;

@@ -92,6 +92,7 @@ static void vibrate(uint8_t level, uint32_t ms) {
   M5.Power.setVibration(level);
   delay(ms);
   M5.Power.setVibration(0);
+  sound.suppressLoudUntil(millis() + SOUND_SUPPRESS_AFTER_VIBRATION_MS);
 }
 
 // ノンブロッキングのバイブ (loop 内で止める)
@@ -99,6 +100,7 @@ static void buzz(uint8_t level, uint32_t ms, uint32_t now) {
   if (meetingMode && MEET_SILENT) return;   // 会議中はバイブ音がマイクに乗るので鳴らさない
   M5.Power.setVibration(level);
   vibUntil = now + ms;
+  sound.suppressLoudUntil(now + ms + SOUND_SUPPRESS_AFTER_VIBRATION_MS);   // 自分の振動音で驚かない
 }
 
 static bool leverVisible() { return HID_ENABLED && meetingMode; }   // ミュートトグルは会議モードだけ
@@ -475,6 +477,8 @@ void loop() {
   sound.update(now);
   if (vibUntil && (int32_t)(now - vibUntil) >= 0) { M5.Power.setVibration(0); vibUntil = 0; }
 
+  if (M5.BtnA.isPressed() || M5.BtnB.isPressed()) sound.suppressLoudUntil(now + SOUND_SUPPRESS_AFTER_TOUCH_MS);   // ボタンのカチッで驚かない
+
   // ---- BLE 接続状態 ----
   if (kb.takeConnectionChange()) {
     statusUntil = now + STATUS_OVERLAY_MS;
@@ -493,6 +497,11 @@ void loop() {
   in.autoSleepEnabled = autoSleepEnabled;
   in.loudNoise = sound.takeLoud();
   in.music = sound.isMusic();
+  if (in.loudNoise && (motion.idleMs(now) < SOUND_SUPPRESS_MOTION_MS || M5.Touch.getCount() > 0)) {
+    // 叩かれた / 持ち替えた / 触られた衝撃はマイクにも入る。空気の音ではないので無視
+    in.loudNoise = false;
+    printf("[snd] loud ignored (handling) %.0f dB\n", sound.levelDb());
+  }
   if (in.loudNoise) {
     motion.touch(now);
     buzz(120, 35, now);
@@ -542,6 +551,7 @@ void loop() {
     if (t.isPressed()) {
       pressed = true;
       motion.touch(now);
+      sound.suppressLoudUntil(now + SOUND_SUPPRESS_AFTER_TOUCH_MS);   // タッチ音で驚かない
       if (onLever || leverDragging) {
         // ---- ミュートレバーをドラッグ中 (顔は反応しない) ----
         const float along = g.vertical ? (ly - g.y) : (lx - g.x);

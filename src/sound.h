@@ -52,6 +52,8 @@ public:
   }
 
   bool takeLoud() { bool l = _loudPending; _loudPending = false; return l; }
+  // この時刻まで「急な大きい音」の判定を止める (バイブやタッチなど自分の出す音を拾わないため)
+  void suppressLoudUntil(uint32_t untilMs) { if ((int32_t)(untilMs - _suppressUntil) > 0) _suppressUntil = untilMs; }
   bool isMusic() const { return _music; }
   float levelDb() const { return _level; }
   float floorDb() const { return _floor; }
@@ -106,9 +108,12 @@ private:
       _levelStd = sqrtf(v / kLevelHist);
     }
 
-    // ---- 急な大きい音 ----
-    if (!_music && (now - _lastLoud) > SOUND_LOUD_REFRACTORY_MS &&
-        level > SOUND_LOUD_MIN_DB && (level - _floor) > SOUND_LOUD_ABOVE_FLOOR_DB && (level - _recent) > SOUND_LOUD_RISE_DB) {
+    // ---- 急な大きい音 (抑止中は判定しない。抑止明けに「急に上がった」と誤認しないよう recent も追従させる) ----
+    const bool suppressed = (int32_t)(now - _suppressUntil) < 0;
+    if (suppressed) {
+      _recent = level;
+    } else if (!_music && (now - _lastLoud) > SOUND_LOUD_REFRACTORY_MS &&
+               level > SOUND_LOUD_MIN_DB && (level - _floor) > SOUND_LOUD_ABOVE_FLOOR_DB && (level - _recent) > SOUND_LOUD_RISE_DB) {
       _loudPending = true;
       _lastLoud = now;
     }
@@ -220,7 +225,7 @@ public:
 private:
   float _tonal = 1.0f, _activeRatio = 0.0f;
   bool _active = false, _music = false, _loudPending = false;
-  uint32_t _lastLoud = 0, _musicSince = 0, _musicLost = 0;
+  uint32_t _lastLoud = 0, _musicSince = 0, _musicLost = 0, _suppressUntil = 0;
   // 移動窓: SOUND_MUSIC_WINDOW_MS をブロック数に換算
   static constexpr int kHist = (int)((uint64_t)SOUND_MUSIC_WINDOW_MS * SOUND_SAMPLE_RATE / (1000ULL * N));
   uint8_t _hist[kHist] = {};

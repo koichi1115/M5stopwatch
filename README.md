@@ -186,6 +186,7 @@ tools/preview_face.py            顔レイアウトの PNG プレビュー
 マイクは ES8311 コーデック経由の **1 本 (モノラル)** なので、音の方向は分かりません。判定はすべて音量と簡易スペクトルです。
 
 - **急な大きい音**: 音量 [dBFS] の背景フロア (ゆっくり追従) を持ち、「フロアより `SOUND_LOUD_ABOVE_FLOOR_DB` 以上大きく」「直前より `SOUND_LOUD_RISE_DB` 以上急に上がり」「絶対値が `SOUND_LOUD_MIN_DB` 以上」のとき。不応期 `SOUND_LOUD_REFRACTORY_MS`。音楽中は反応しない
+- **自分の音で驚かない**: マイクは筐体内なので、バイブ・タッチ・ボタン・持ち替えの衝撃がそのまま大きい音に見える。バイブ中と直後 (`SOUND_SUPPRESS_AFTER_VIBRATION_MS`)、タッチ / ボタン操作中と直後 (`SOUND_SUPPRESS_AFTER_TOUCH_MS`) は判定を止め、IMU が直前 `SOUND_SUPPRESS_MOTION_MS` に動きを検知していた大きい音は「衝撃」として無視する (ログに `loud ignored (handling)`)
 - **音楽**: 次の 3 条件が `SOUND_MUSIC_ENTER_MS` 続いたら音楽。切れて `SOUND_MUSIC_EXIT_MS` 経つと解除
   1. 直近 `SOUND_MUSIC_WINDOW_MS` の間に音がしている割合 (`act`) が `SOUND_MUSIC_ACTIVE_RATIO` 以上 (しゃべり声は途切れが多い)
   2. 音量の時間変動 (直近 1 秒の標準偏差 `std` [dB]) が `SOUND_MUSIC_LEVEL_STD_MIN..MAX` の範囲 (ファン等の定常ノイズは小さく、しゃべり声は大きい)
