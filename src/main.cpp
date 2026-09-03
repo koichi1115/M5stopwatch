@@ -27,6 +27,7 @@
 #include "orientation.h"
 #include "face.h"
 #include "sound.h"
+#include "hid.h"
 
 // ------------------------------------------------------------
 static M5Canvas screen(&M5.Display);
@@ -50,6 +51,12 @@ static uint32_t sleepEnteredMs = 0;
 static uint32_t mouthTouchStart = 0;   // 口元に触れ始めた時刻 (0 = 触れていない)
 static uint32_t vibUntil = 0;          // ノンブロッキングのバイブ停止時刻
 static bool musicShown = false;
+// BLE キーボードとミュートレバー
+static BleKeyboardMini kb;
+static bool micMuted = false;          // 端末側で覚えている状態 (PC からは返ってこない)
+static float leverKnob = 0.0f;         // 表示上のつまみ位置 0 = 上 (MIC) .. 1 = 下 (MUTE)
+static bool leverDragging = false;
+static float leverDragPos = 0.0f, leverDragStart = 0.0f;
 
 static constexpr gpio_num_t WAKE_BUTTON_1 = GPIO_NUM_1;
 static constexpr gpio_num_t WAKE_BUTTON_2 = GPIO_NUM_2;
@@ -81,6 +88,23 @@ static void buzz(uint8_t level, uint32_t ms, uint32_t now) {
   vibUntil = now + ms;
 }
 
+static bool leverVisible() { return HID_ENABLED && kb.connected(); }
+
+// PC にショートカットを送る。未接続なら長めのバイブで知らせる
+static void sendHotkey(uint8_t key, uint8_t mods, uint32_t now) {
+  motion.touch(now);
+  if (!HID_ENABLED) return;
+  if (!kb.connected()) {
+    buzz(90, 90, now);
+    statusUntil = now + 1500;
+    puts("[hid] not connected");
+    return;
+  }
+  kb.tap(key, mods);
+  buzz(140, 25, now);
+  printf("[hid] key 0x%02X mods 0x%02X\n", key, mods);
+}
+
 static void applyBrightness() {
   uint8_t b = BRIGHTNESS_LEVELS[brightnessIndex];
   if (face.isSleeping()) b = SLEEP_BRIGHTNESS;
@@ -100,6 +124,7 @@ static void setLowClock(bool enable) {
 static void enterDeepSleep() {
   puts("[power] entering deep sleep");
   sound.end();
+  kb.end();
   M5.Display.sleep();            // 輝度 0 (フレームバッファ経由だと sleep-in は届かない)
   M5.Display.waitDisplay();
   M5.Imu.sleep();
@@ -165,6 +190,36 @@ static void drawFur(float angleDeg) {
   }
 }
 
+// ミュートレバー (フェーダー風)。顔スプライトに描くので顔と一緒に回る。上 = MIC ON, 下 = MUTE
+static void drawLever() {
+  M5Canvas& sp = face.sprite();
+  const float c = sp.width() / 2.0f;
+  const float x = c + LEVER_X, top = c - LEVER_HALF_LEN, bot = c + LEVER_HALF_LEN;
+  const float target = leverDragging ? leverDragPos : (micMuted ? 1.0f : 0.0f);
+  leverKnob += (target - leverKnob) * (leverDragging ? 1.0f : 0.25f);
+  const uint16_t col = micMuted ? COLOR_LEVER_MUTE : COLOR_LEVER_ON;
+
+  sp.fillRoundRect((int)(x - 7), (int)(top - 8), 14, (int)(bot - top + 16), 7, COLOR_LEVER_TRACK);
+  for (int k = 0; k <= 4; ++k) {
+    const int y = (int)(top + (bot - top) * k / 4);
+    sp.drawFastHLine((int)(x - 17), y, 8, COLOR_UI);
+    sp.drawFastHLine((int)(x + 9), y, 8, COLOR_UI);
+  }
+  const float ky = top + (bot - top) * leverKnob;
+  sp.fillCircle((int)x, (int)ky, LEVER_KNOB_R, col);
+  sp.fillCircle((int)x, (int)ky, LEVER_KNOB_R - 6, 0x0000);
+  sp.fillCircle((int)x, (int)ky, LEVER_KNOB_R - 10, col);
+  sp.drawFastHLine((int)(x - LEVER_KNOB_R + 4), (int)ky, 2 * LEVER_KNOB_R - 8, 0x0000);
+
+  sp.setFont(&fonts::Font2);
+  sp.setTextSize(1);
+  sp.setTextDatum(middle_center);
+  sp.setTextColor(micMuted ? COLOR_UI : COLOR_LEVER_ON);
+  sp.drawString("MIC", (int)x, (int)(top - 24));
+  sp.setTextColor(micMuted ? COLOR_LEVER_MUTE : COLOR_UI);
+  sp.drawString("MUTE", (int)x, (int)(bot + 24));
+}
+
 static void drawStatus(uint32_t now) {
   M5Canvas& sp = face.sprite();
   const int w = sp.width();
@@ -195,6 +250,9 @@ static void drawStatus(uint32_t now) {
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "snd %4.0fdB fl %4.0f sfm %.2f act %.2f%s", sound.levelDb(), sound.floorDb(),
            sound.flatness(), sound.activeRatio(), sound.isMusic() ? " MUSIC" : "");
+  sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "ble %s  mic %s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
+           micMuted ? "MUTED" : "on");
   sp.drawString(line, x, y);
 
   // 電池アーク (下部, 左から右へ伸びる)
@@ -217,6 +275,7 @@ static void drawStatus(uint32_t now) {
 static void render(uint32_t now) {
   const float angle = orient.displayAngle();
   face.draw();
+  if (leverVisible()) drawLever();
   if ((int32_t)(now - statusUntil) < 0) drawStatus(now);
 
   if (out != &screen) M5.Display.startWrite();
@@ -244,8 +303,7 @@ static void handleButtons(uint32_t now) {
     vibrate(120, 40);
     printf("[cfg] brightness -> %d\n", BRIGHTNESS_LEVELS[brightnessIndex]);
   } else if (M5.BtnA.wasClicked()) {
-    statusUntil = now + STATUS_OVERLAY_MS;
-    motion.touch(now);
+    sendHotkey(HID_BTN_A_KEY, HID_BTN_A_MODS, now);   // Alt+Tab
   }
 
   // ---- BtnB ----
@@ -266,7 +324,7 @@ static void handleButtons(uint32_t now) {
     }
     statusUntil = now + STATUS_OVERLAY_MS;
   } else if (M5.BtnB.wasClicked()) {
-    motion.touch(now);
+    sendHotkey(HID_BTN_B_KEY, HID_BTN_B_MODS, now);   // 無変換
   }
 }
 
@@ -293,6 +351,7 @@ void setup() {
     motionCheckAfterTimerWake();   // 動いていなければ戻ってこない
   }
   if (SOUND_ENABLED) printf("[boot] mic %s\n", sound.begin() ? "ok" : "FAILED");
+  if (HID_ENABLED) printf("[boot] ble hid \"%s\" %s\n", HID_DEVICE_NAME, kb.begin(HID_DEVICE_NAME) ? "advertising" : "FAILED");
 
   M5.Display.setRotation(0);
   screenW = M5.Display.width();
@@ -339,6 +398,14 @@ void loop() {
   sound.update(now);
   if (vibUntil && (int32_t)(now - vibUntil) >= 0) { M5.Power.setVibration(0); vibUntil = 0; }
 
+  // ---- BLE 接続状態 ----
+  if (kb.takeConnectionChange()) {
+    statusUntil = now + STATUS_OVERLAY_MS;
+    buzz(150, 60, now);
+    motion.touch(now);
+    printf("[hid] %s\n", kb.connected() ? "connected" : "disconnected");
+  }
+
   // ---- 入力 ----
   handleButtons(now);
 
@@ -370,31 +437,55 @@ void loop() {
     }
   }
 
+  bool pressed = false;
   if (M5.Touch.isEnabled() && M5.Touch.getCount() > 0) {
     const auto& t = M5.Touch.getDetail(0);
-    if (t.wasClicked()) in.tapped = true;
+    // タッチ座標 → 顔ローカル座標 (顔の回転を打ち消す)
+    const float a = -orient.displayAngle() * OrientationTracker::kDegToRad;
+    const float dx = t.x - (screenW / 2.0f + DISPLAY_OFFSET_X), dy = t.y - (screenH / 2.0f + DISPLAY_OFFSET_Y);
+    const float lx = dx * cosf(a) - dy * sinf(a);
+    const float ly = dx * sinf(a) + dy * cosf(a);
+    const bool onLever = leverVisible() && fabsf(lx - LEVER_X) < LEVER_ZONE_HALF_W && fabsf(ly) < LEVER_HALF_LEN + LEVER_KNOB_R;
+
+    if (t.wasClicked() && !onLever && !leverDragging) in.tapped = true;
     if (t.isPressed()) {
-      in.touching = true;
+      pressed = true;
       motion.touch(now);
-      // タッチ座標 → 顔ローカル座標 (顔の回転を打ち消す)
-      const float a = -orient.displayAngle() * OrientationTracker::kDegToRad;
-      const float dx = t.x - (screenW / 2.0f + DISPLAY_OFFSET_X), dy = t.y - (screenH / 2.0f + DISPLAY_OFFSET_Y);
-      const float lx = dx * cosf(a) - dy * sinf(a);
-      const float ly = dx * sinf(a) + dy * cosf(a);
-      const float R = screenW / 2.0f * 0.75f;
-      in.touchGazeX = lx / R;
-      in.touchGazeY = ly / R;
-      // 口元 (顔ローカル座標) に触れ続けているか
-      const bool inMouthZone = fabsf(lx) < MOUTH_ZONE_HALF_W && ly > MOUTH_ZONE_TOP && ly < MOUTH_ZONE_BOTTOM;
-      if (inMouthZone) {
-        if (mouthTouchStart == 0) mouthTouchStart = now ? now : 1;
-        in.mouthTouchMs = now - mouthTouchStart;
-      } else {
+      if (onLever || leverDragging) {
+        // ---- ミュートレバーをドラッグ中 (顔は反応しない) ----
+        const float pos = (ly + LEVER_HALF_LEN) / (2.0f * LEVER_HALF_LEN);
+        leverDragPos = pos < 0 ? 0 : (pos > 1 ? 1 : pos);
+        if (!leverDragging) { leverDragging = true; leverDragStart = leverDragPos; }
         mouthTouchStart = 0;
+      } else {
+        in.touching = true;
+        const float R = screenW / 2.0f * 0.75f;
+        in.touchGazeX = lx / R;
+        in.touchGazeY = ly / R;
+        // 口元 (顔ローカル座標) に触れ続けているか
+        const bool inMouthZone = fabsf(lx) < MOUTH_ZONE_HALF_W && ly > MOUTH_ZONE_TOP && ly < MOUTH_ZONE_BOTTOM;
+        if (inMouthZone) {
+          if (mouthTouchStart == 0) mouthTouchStart = now ? now : 1;
+          in.mouthTouchMs = now - mouthTouchStart;
+        } else {
+          mouthTouchStart = 0;
+        }
       }
     }
   }
   if (!in.touching) mouthTouchStart = 0;
+  // ---- レバーを離した: 少ししか動かしていなければトグル、動かしていれば位置で決める ----
+  if (leverDragging && !pressed) {
+    leverDragging = false;
+    const bool moved = fabsf(leverDragPos - leverDragStart) > 0.15f;
+    const bool newMuted = moved ? (leverDragPos > 0.5f) : !micMuted;
+    if (newMuted != micMuted) {
+      micMuted = newMuted;
+      sendHotkey(HID_MUTE_KEY, HID_MUTE_MODS, now);
+      buzz(200, micMuted ? 120 : 40, now);   // ミュートは長め、解除は短め
+      printf("[hid] mic %s\n", micMuted ? "MUTED" : "on");
+    }
+  }
   if (in.tapped) motion.touch(now);
   in.idleMs = motion.idleMs(now);
   in.moving = in.idleMs < 300;

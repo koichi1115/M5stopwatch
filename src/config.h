@@ -146,3 +146,28 @@ constexpr float SOUND_MUSIC_LEVEL_STD_MIN = 1.0f;    // 音量の時間変動 [d
 constexpr float SOUND_MUSIC_LEVEL_STD_MAX = 6.0f;
 constexpr uint32_t SOUND_MUSIC_ENTER_MS = 3000;      // 条件がこれだけ続いたら音楽
 constexpr uint32_t SOUND_MUSIC_EXIT_MS = 2000;       // 条件が切れてこれだけ経ったら解除
+
+// ============================================================
+// 7. BLE キーボード (PC にペアリングしてショートカットを送る)
+// ============================================================
+constexpr bool HID_ENABLED = true;
+constexpr const char* HID_DEVICE_NAME = "Makkuro Badge";
+// 修飾キー: 0x01 Ctrl / 0x02 Shift / 0x04 Alt / 0x08 Win
+// ミュート切替 (画面のレバー): Windows 11 の通話ミュート Win+Alt+K (Teams 対応、フォーカス不要)。
+//   Teams にフォーカスがある前提なら Ctrl+Shift+M (mods 0x03, key 0x10)
+constexpr uint8_t HID_MUTE_MODS = 0x08 | 0x04;
+constexpr uint8_t HID_MUTE_KEY = 0x0E;           // K
+// BtnA クリック: Alt+Tab (直前のウィンドウと切り替え)
+constexpr uint8_t HID_BTN_A_MODS = 0x04;
+constexpr uint8_t HID_BTN_A_KEY = 0x2B;          // Tab
+// BtnB クリック: 無変換 (音声入力)。Win+H にするなら mods 0x08, key 0x0B
+constexpr uint8_t HID_BTN_B_MODS = 0x00;
+constexpr uint8_t HID_BTN_B_KEY = 0x8B;          // 無変換
+// ミュートレバー (顔ローカル座標, px)。PC と接続中だけ表示
+constexpr int LEVER_X = 158;                     // 顔中心からの横位置 (右)
+constexpr int LEVER_HALF_LEN = 105;              // レバーの半分の長さ (上 = MIC ON, 下 = MUTE)
+constexpr int LEVER_KNOB_R = 22;
+constexpr int LEVER_ZONE_HALF_W = 48;            // タッチ判定の半幅
+constexpr uint16_t COLOR_LEVER_TRACK = 0x4208;
+constexpr uint16_t COLOR_LEVER_ON = 0x07E0;      // 緑
+constexpr uint16_t COLOR_LEVER_MUTE = 0xF800;    // 赤
