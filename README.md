@@ -113,36 +113,6 @@ pio device monitor                # シリアルログ (115200bps, USB CDC)
 
 ---
 
-## 指が近づくのを感じる (近接検知)
-
-**結論: 本体だけでは無理です。** StopWatch には近接センサー (IR / ToF) が無く、
-タッチパネル (CST820) はホバーを返さないので「触れた」瞬間しか分かりません。
-ただし、小さな電極を 1 本足せば「数 cm 手前で気づく」は実現できます。
-
-| 方式 | 精度 / 距離 | 追加ハード | 見た目 | 状態 |
-|---|---|---|---|---|
-| **A. 静電容量 (ESP32-S3 内蔵タッチ)** | 1〜5cm、手の大きさ・電極依存 | 銅箔テープ or 針金 1 本 | ほぼ変わらない | **実装済 (要電極)** |
-| B. ToF ユニット (M5 Unit ToF / ToF4M) を Grove に接続 | 2cm〜数 m、方向も分かる | Unit 1 個 + ケーブル | 横に箱が出っ張る | 未実装 (簡単) |
-| C. 本体タッチのみ | 接触した瞬間だけ | 無し | - | 現状 |
-
-### A の作り方
-
-1. Grove (HY2.0-4P) の **SDA ピン (GPIO10)** に線を出す。Grove ケーブルを半分に切って白線 (SDA) を使うのが楽
-   (ピン並びは GND / 5V / SDA / SCL。実機で確認すること)
-2. 線の先に銅箔テープ (ベゼル裏に一周) か、ケース内に這わせた針金を繋ぐ。面積が大きいほど遠くから反応
-3. `src/config.h` の `PROXIMITY_ENABLED = true` にしてビルド
-4. BtnA クリックのステータス表示に `prox 生値/基準値 r比率 lv` が出るので、指を近づけて比率がどれだけ上がるか見る
-5. 上がり幅に合わせて `PROXIMITY_NEAR_RATIO` (反応開始) と `PROXIMITY_CLOSE_RATIO` (触れる直前) を調整
-6. 環境が変わって誤反応するときは BtnB クリックで基準値を取り直す (自動でもゆっくり追従する)
-
-反応: 近づくと目を見開いて瞳孔が開き、じっと正面を見る。触れる直前は少し身構えて細目になる。
-寝ていても手が伸びてくれば起きる。タッチすると今まで通り喜ぶ。
-
-注意: 電極は Grove の I2C ピンを使うので、Grove に I2C ユニットを挿すのと排他。方向 (どこから来たか) は分からない。
-B の ToF 方式が欲しくなったら `proximity.h` と同じインターフェースで差し替えられる作りにしてある。
-
----
-
 ## 調整箇所
 
 ほぼ全て `src/config.h` に集約しています。
@@ -159,7 +129,6 @@ B の ToF 方式が欲しくなったら `proximity.h` と同じインターフ�
 | 眠くなるまでの時間 | `DROWSY_AFTER_MS`, `SLEEP_AFTER_MS`, `DEEP_SLEEP_AFTER_MS` |
 | 動き / 振り の感度 | `MOTION_*`, `SHAKE_*` |
 | 明るさ | `BRIGHTNESS_LEVELS`, `SLEEP_BRIGHTNESS` |
-| 近接検知 | `PROXIMITY_ENABLED`, `PROXIMITY_TOUCH_PIN`, `PROXIMITY_NEAR_RATIO`, `PROXIMITY_CLOSE_RATIO` |
 
 `tools/preview_face.py` (要 Pillow) で顔レイアウトの静止画プレビューを出せます (幾何を Python で再現したもので、実機描画そのものではありません)。
 
@@ -171,8 +140,7 @@ B の ToF 方式が欲しくなったら `proximity.h` と同じインターフ�
 platformio.ini        ビルド設定 (ESP32-S3, 16MB Flash, OPI PSRAM, USB CDC)
 src/config.h          調整パラメータ
 src/orientation.h     姿勢トラッカ (重力→回転角, 較正, 反転, スナップ) と動き検出
-src/face.h            顔の描画と気分の状態機械 (起床 / 眠い / 就寝 / 驚き / 喜び / 近づくものを見る)
-src/proximity.h       近接検知 (ESP32-S3 タッチセンサー + 外付け電極)
+src/face.h            顔の描画と気分の状態機械 (起床 / 眠い / 就寝 / 驚き / 喜び)
 src/main.cpp          入力 (ボタン, タッチ, IMU), 電源管理 (輝度, CPU クロック, deep sleep), 描画ループ
 tools/export_arduino_sketch.sh   Arduino IDE 用スケッチを生成
 tools/preview_face.py            顔レイアウトの PNG プレビュー

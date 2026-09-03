@@ -22,7 +22,6 @@
 #include "config.h"
 #include "orientation.h"
 #include "face.h"
-#include "proximity.h"
 
 // ------------------------------------------------------------
 static M5Canvas screen(&M5.Display);
@@ -30,7 +29,6 @@ static LovyanGFX* out = &screen;   // PSRAM が無いときは M5.Display に直
 static Face face;
 static OrientationTracker orient;
 static MotionDetector motion;
-static ProximitySensor proximity;
 static Preferences prefs;
 
 static uint8_t brightnessIndex = DEFAULT_BRIGHTNESS_INDEX;
@@ -179,12 +177,6 @@ static void drawStatus(uint32_t now) {
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "up %lus  imu %s  fps %d", (unsigned long)((now - bootMs) / 1000),
            M5.Imu.isEnabled() ? "ok" : "NONE", (int)(1000 / (FRAME_INTERVAL_AWAKE_MS ? FRAME_INTERVAL_AWAKE_MS : 1)));
-  sp.drawString(line, x, y); y += 16;
-  if (proximity.enabled()) {
-    snprintf(line, sizeof(line), "prox %.0f/%.0f r%.3f lv %.2f", proximity.raw(), proximity.baseline(), proximity.ratio(), proximity.level());
-  } else {
-    snprintf(line, sizeof(line), "prox: off (PROXIMITY_ENABLED)");
-  }
   sp.drawString(line, x, y);
 
   // 電池アーク (下部, 左から右へ伸びる)
@@ -257,7 +249,6 @@ static void handleButtons(uint32_t now) {
     statusUntil = now + STATUS_OVERLAY_MS;
   } else if (M5.BtnB.wasClicked()) {
     motion.touch(now);
-    proximity.recalibrate();   // 近接の基準値を取り直す (何も近づけていない状態で押す)
   }
 }
 
@@ -297,8 +288,6 @@ void setup() {
   }
   furSeed = (uint16_t)esp_random();
   randomSeed(esp_random());
-  proximity.begin();
-  if (proximity.enabled()) Serial.printf("[boot] proximity electrode on GPIO%d, baseline=%.0f\n", PROXIMITY_TOUCH_PIN, proximity.baseline());
 
   M5.Display.fillScreen(TFT_BLACK);
   M5.Display.setBrightness(BRIGHTNESS_LEVELS[brightnessIndex]);
@@ -333,8 +322,6 @@ void loop() {
   in.now = now;
   in.shaken = motion.takeShake();
   in.autoSleepEnabled = autoSleepEnabled;
-  in.proximity = proximity.update(now);
-  if (in.proximity > 0.3f) motion.touch(now);   // 手が伸びてきたら起きる
 
   if (M5.Touch.isEnabled() && M5.Touch.getCount() > 0) {
     const auto& t = M5.Touch.getDetail(0);
@@ -383,7 +370,7 @@ void loop() {
   static uint32_t lastLog = 0;
   if ((int32_t)(now - statusUntil) < 0 && now - lastLog > 500) {
     lastLog = now;
-    Serial.printf("[imu] gx=%+.2f gy=%+.2f |a|=%.2f angle=%.1f mood=%d idle=%lu prox=%.0f/%.0f\n", orient.screenGx(), orient.screenGy(),
-                  orient.magnitudeG(), orient.displayAngle(), (int)face.mood(), (unsigned long)in.idleMs, proximity.raw(), proximity.baseline());
+    Serial.printf("[imu] gx=%+.2f gy=%+.2f |a|=%.2f angle=%.1f mood=%d idle=%lu\n", orient.screenGx(), orient.screenGy(),
+                  orient.magnitudeG(), orient.displayAngle(), (int)face.mood(), (unsigned long)in.idleMs);
   }
 }
