@@ -153,10 +153,10 @@ constexpr uint32_t SOUND_MUSIC_EXIT_MS = 2000;       // 条件が切れてこれ
 constexpr bool HID_ENABLED = true;
 constexpr const char* HID_DEVICE_NAME = "Makkuro Badge";
 // 修飾キー: 0x01 Ctrl / 0x02 Shift / 0x04 Alt / 0x08 Win
-// ミュート切替 (画面のレバー): Windows 11 の通話ミュート Win+Alt+K (Teams 対応、フォーカス不要)。
-//   Teams にフォーカスがある前提なら Ctrl+Shift+M (mods 0x03, key 0x10)
-constexpr uint8_t HID_MUTE_MODS = 0x08 | 0x04;
-constexpr uint8_t HID_MUTE_KEY = 0x0E;           // K
+// ミュート切替 (画面のレバー): Teams の Alt+A (Teams のウィンドウにフォーカスがあること)。
+//   Windows 11 の通話ミュート Win+Alt+K (mods 0x0C, key 0x0E) は「対応アプリなし」になる環境があった
+constexpr uint8_t HID_MUTE_MODS = 0x04;
+constexpr uint8_t HID_MUTE_KEY = 0x04;           // A
 // BtnA クリック: Alt+Tab (直前のウィンドウと切り替え)
 constexpr uint8_t HID_BTN_A_MODS = 0x04;
 constexpr uint8_t HID_BTN_A_KEY = 0x2B;          // Tab
@@ -171,3 +171,14 @@ constexpr int LEVER_ZONE_HALF_W = 48;            // タッチ判定の半幅
 constexpr uint16_t COLOR_LEVER_TRACK = 0x4208;
 constexpr uint16_t COLOR_LEVER_ON = 0x07E0;      // 緑
 constexpr uint16_t COLOR_LEVER_MUTE = 0xF800;    // 赤
+
+// ============================================================
+// 8. 会議モード (顔を下へスワイプで入る / 上へスワイプで戻る)
+//    バイブ・音への反応・かじり・居眠りを止め、大きな横型ミュートトグルと状態だけを表示
+// ============================================================
+constexpr int SWIPE_MIN_PX = 110;                // モード切替とみなすスワイプの長さ (顔ローカル座標)
+constexpr int MEET_LEVER_HALF_LEN = 105;         // 横型トグルの半分の長さ (左 = MIC ON, 右 = MUTE)
+constexpr int MEET_LEVER_KNOB_R = 40;
+constexpr int MEET_LEVER_ZONE_HALF_W = 95;       // タッチ判定の半分の高さ
+constexpr uint8_t MEET_BRIGHTNESS_PERCENT = 70;  // 通常の明るさに対する割合
+constexpr bool MEET_SILENT = true;               // 会議モード中はバイブを一切鳴らさない (マイクに乗るため)

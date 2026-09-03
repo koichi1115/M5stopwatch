@@ -57,6 +57,17 @@ static bool micMuted = false;          // 端末側で覚えている状態 (PC 
 static float leverKnob = 0.0f;         // 表示上のつまみ位置 0 = 上 (MIC) .. 1 = 下 (MUTE)
 static bool leverDragging = false;
 static float leverDragPos = 0.0f, leverDragStart = 0.0f;
+static bool leverCancel = false;       // スワイプでモード切替したときレバー操作を無効にする
+// 会議モード
+static bool meetingMode = false;
+static uint32_t meetingToggleFlashUntil = 0;
+
+// レバーの形 (顔ローカル座標)。通常 = 顔の右に縦、会議モード = 中央に横
+struct LeverGeom { float x, y; bool vertical; float halfLen, knobR, zoneHalfW; };
+static LeverGeom leverGeom() {
+  if (meetingMode) return {0.0f, 0.0f, false, (float)MEET_LEVER_HALF_LEN, (float)MEET_LEVER_KNOB_R, (float)MEET_LEVER_ZONE_HALF_W};
+  return {(float)LEVER_X, 0.0f, true, (float)LEVER_HALF_LEN, (float)LEVER_KNOB_R, (float)LEVER_ZONE_HALF_W};
+}
 
 static constexpr gpio_num_t WAKE_BUTTON_1 = GPIO_NUM_1;
 static constexpr gpio_num_t WAKE_BUTTON_2 = GPIO_NUM_2;
@@ -69,6 +80,7 @@ static void loadSettings() {
   brightnessIndex = prefs.getUChar("bri", DEFAULT_BRIGHTNESS_INDEX);
   if (brightnessIndex >= sizeof(BRIGHTNESS_LEVELS)) brightnessIndex = DEFAULT_BRIGHTNESS_INDEX;
   autoSleepEnabled = prefs.getBool("asleep", true);
+  meetingMode = prefs.getBool("meet", false);
 }
 
 static void saveOrientation() {
@@ -84,11 +96,26 @@ static void vibrate(uint8_t level, uint32_t ms) {
 
 // ノンブロッキングのバイブ (loop 内で止める)
 static void buzz(uint8_t level, uint32_t ms, uint32_t now) {
+  if (meetingMode && MEET_SILENT) return;   // 会議中はバイブ音がマイクに乗るので鳴らさない
   M5.Power.setVibration(level);
   vibUntil = now + ms;
 }
 
-static bool leverVisible() { return HID_ENABLED && kb.connected(); }
+static bool leverVisible() { return HID_ENABLED && (kb.connected() || meetingMode); }
+
+// 会議モードの切替。入るとマイク (音センサ) を止め、顔のリアクションとバイブを止める
+static void setMeetingMode(bool on, uint32_t now) {
+  if (on == meetingMode) return;
+  if (!on) { meetingMode = false; buzz(120, 40, now); }       // 戻るときは短く震える (会議モードの外で鳴る)
+  else { buzz(120, 40, now); meetingMode = true; }             // 入るときも 1 回だけ (この時点ではまだ通常モード)
+  prefs.putBool("meet", meetingMode);
+  if (meetingMode) { sound.end(); M5.Power.setVibration(0); vibUntil = 0; }
+  else if (SOUND_ENABLED) sound.begin();
+  leverDragging = false;
+  statusUntil = now + 1500;
+  motion.touch(now);
+  printf("[mode] meeting %s\n", meetingMode ? "ON" : "off");
+}
 
 // PC にショートカットを送る。未接続なら長めのバイブで知らせる
 static void sendHotkey(uint8_t key, uint8_t mods, uint32_t now) {
@@ -107,7 +134,8 @@ static void sendHotkey(uint8_t key, uint8_t mods, uint32_t now) {
 
 static void applyBrightness() {
   uint8_t b = BRIGHTNESS_LEVELS[brightnessIndex];
-  if (face.isSleeping()) b = SLEEP_BRIGHTNESS;
+  if (meetingMode) b = (uint8_t)((uint32_t)b * MEET_BRIGHTNESS_PERCENT / 100);
+  else if (face.isSleeping()) b = SLEEP_BRIGHTNESS;
   else if (face.isDrowsy()) b = (uint8_t)((uint32_t)b * DROWSY_BRIGHTNESS_SCALE_PERCENT / 100);
   if (b < 4) b = 4;
   if (M5.Display.getBrightness() != b) M5.Display.setBrightness(b);
@@ -194,30 +222,75 @@ static void drawFur(float angleDeg) {
 static void drawLever() {
   M5Canvas& sp = face.sprite();
   const float c = sp.width() / 2.0f;
-  const float x = c + LEVER_X, top = c - LEVER_HALF_LEN, bot = c + LEVER_HALF_LEN;
+  const LeverGeom g = leverGeom();
+  const float cx = c + g.x, cy = c + g.y;
   const float target = leverDragging ? leverDragPos : (micMuted ? 1.0f : 0.0f);
   leverKnob += (target - leverKnob) * (leverDragging ? 1.0f : 0.25f);
   const uint16_t col = micMuted ? COLOR_LEVER_MUTE : COLOR_LEVER_ON;
+  const int kr = (int)g.knobR;
+  const int tw = kr / 3;   // トラックの太さ
 
-  sp.fillRoundRect((int)(x - 7), (int)(top - 8), 14, (int)(bot - top + 16), 7, COLOR_LEVER_TRACK);
+  // トラックと目盛り
+  if (g.vertical) sp.fillRoundRect((int)(cx - tw / 2), (int)(cy - g.halfLen - tw / 2), tw, (int)(2 * g.halfLen + tw), tw / 2, COLOR_LEVER_TRACK);
+  else            sp.fillRoundRect((int)(cx - g.halfLen - tw / 2), (int)(cy - tw / 2), (int)(2 * g.halfLen + tw), tw, tw / 2, COLOR_LEVER_TRACK);
   for (int k = 0; k <= 4; ++k) {
-    const int y = (int)(top + (bot - top) * k / 4);
-    sp.drawFastHLine((int)(x - 17), y, 8, COLOR_UI);
-    sp.drawFastHLine((int)(x + 9), y, 8, COLOR_UI);
+    const float p = -g.halfLen + 2 * g.halfLen * k / 4;
+    if (g.vertical) { sp.drawFastHLine((int)(cx - kr + 5), (int)(cy + p), 8, COLOR_UI); sp.drawFastHLine((int)(cx + kr - 13), (int)(cy + p), 8, COLOR_UI); }
+    else            { sp.drawFastVLine((int)(cx + p), (int)(cy - kr + 5), 8, COLOR_UI); sp.drawFastVLine((int)(cx + p), (int)(cy + kr - 13), 8, COLOR_UI); }
   }
-  const float ky = top + (bot - top) * leverKnob;
-  sp.fillCircle((int)x, (int)ky, LEVER_KNOB_R, col);
-  sp.fillCircle((int)x, (int)ky, LEVER_KNOB_R - 6, 0x0000);
-  sp.fillCircle((int)x, (int)ky, LEVER_KNOB_R - 10, col);
-  sp.drawFastHLine((int)(x - LEVER_KNOB_R + 4), (int)ky, 2 * LEVER_KNOB_R - 8, 0x0000);
+  // つまみ
+  const float p = -g.halfLen + 2 * g.halfLen * leverKnob;
+  const float kx = g.vertical ? cx : cx + p, ky = g.vertical ? cy + p : cy;
+  sp.fillCircle((int)kx, (int)ky, kr, col);
+  sp.fillCircle((int)kx, (int)ky, kr - 6, 0x0000);
+  sp.fillCircle((int)kx, (int)ky, kr - 10, col);
+  if (g.vertical) sp.drawFastHLine((int)(kx - kr + 4), (int)ky, 2 * kr - 8, 0x0000);
+  else            sp.drawFastVLine((int)kx, (int)(ky - kr + 4), 2 * kr - 8, 0x0000);
 
+  // ラベル
   sp.setFont(&fonts::Font2);
   sp.setTextSize(1);
   sp.setTextDatum(middle_center);
   sp.setTextColor(micMuted ? COLOR_UI : COLOR_LEVER_ON);
-  sp.drawString("MIC", (int)x, (int)(top - 24));
+  if (g.vertical) sp.drawString("MIC", (int)cx, (int)(cy - g.halfLen - 24));
+  else            sp.drawString("MIC", (int)(cx - g.halfLen - 34), (int)cy);
   sp.setTextColor(micMuted ? COLOR_LEVER_MUTE : COLOR_UI);
-  sp.drawString("MUTE", (int)x, (int)(bot + 24));
+  if (g.vertical) sp.drawString("MUTE", (int)cx, (int)(cy + g.halfLen + 24));
+  else            sp.drawString("MUTE", (int)(cx + g.halfLen + 38), (int)cy);
+}
+
+// 会議モードの画面: 閉じた目 (静か) + 大きな横型ミュートトグル + 状態
+static void drawMeeting(uint32_t now) {
+  M5Canvas& sp = face.sprite();
+  const int c = sp.width() / 2;
+  sp.fillScreen(COLOR_TRANSPARENT);
+
+  // 閉じた目 (‿ ‿)。ミュート中は少し寝ぼけた薄い色
+  const uint16_t eye = micMuted ? 0x8410 : COLOR_EYE_WHITE;
+  for (int i = -1; i <= 1; i += 2) sp.fillArc(c + i * 62, c - 118, 26, 33, 20, 160, eye);
+
+  sp.setFont(&fonts::Font2);
+  sp.setTextSize(1);
+  sp.setTextDatum(middle_center);
+  sp.setTextColor(COLOR_UI);
+  sp.drawString("MEETING  (swipe up to exit)", c, c - 62);
+
+  drawLever();
+
+  // 状態 (大きく)
+  const bool flash = (int32_t)(now - meetingToggleFlashUntil) < 0;
+  sp.setFont(&fonts::Font4);
+  sp.setTextColor(micMuted ? COLOR_LEVER_MUTE : COLOR_LEVER_ON);
+  sp.drawString(micMuted ? "MUTED" : "MIC ON", c, c + 82);
+  if (flash) sp.drawRoundRect(c - 80, c + 64, 160, 36, 8, micMuted ? COLOR_LEVER_MUTE : COLOR_LEVER_ON);
+
+  // 接続と電池
+  char line[48];
+  const int32_t bat = M5.Power.getBatteryLevel();
+  snprintf(line, sizeof(line), "%s   bat %ld%%", kb.connected() ? "PC connected" : "PC not connected", (long)bat);
+  sp.setFont(&fonts::Font2);
+  sp.setTextColor(kb.connected() ? COLOR_UI : COLOR_LEVER_MUTE);
+  sp.drawString(line, c, c + 130);
 }
 
 static void drawStatus(uint32_t now) {
@@ -251,8 +324,8 @@ static void drawStatus(uint32_t now) {
   snprintf(line, sizeof(line), "snd %4.0fdB fl %4.0f sfm %.2f act %.2f%s", sound.levelDb(), sound.floorDb(),
            sound.flatness(), sound.activeRatio(), sound.isMusic() ? " MUSIC" : "");
   sp.drawString(line, x, y); y += 16;
-  snprintf(line, sizeof(line), "ble %s  mic %s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
-           micMuted ? "MUTED" : "on");
+  snprintf(line, sizeof(line), "ble %s  mic %s%s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
+           micMuted ? "MUTED" : "on", meetingMode ? "  MEETING" : "");
   sp.drawString(line, x, y);
 
   // 電池アーク (下部, 左から右へ伸びる)
@@ -274,13 +347,17 @@ static void drawStatus(uint32_t now) {
 
 static void render(uint32_t now) {
   const float angle = orient.displayAngle();
-  face.draw();
-  if (leverVisible()) drawLever();
+  if (meetingMode) {
+    drawMeeting(now);
+  } else {
+    face.draw();
+    if (leverVisible()) drawLever();
+  }
   if ((int32_t)(now - statusUntil) < 0) drawStatus(now);
 
   if (out != &screen) M5.Display.startWrite();
   out->fillScreen(TFT_BLACK);
-  drawFur(angle);
+  if (!meetingMode) drawFur(angle);
   if (FACE_ANTIALIAS) face.sprite().pushRotatedWithAA(out, angle, COLOR_TRANSPARENT);
   else face.sprite().pushRotateZoom(out, screenW / 2.0f + DISPLAY_OFFSET_X, screenH / 2.0f + DISPLAY_OFFSET_Y, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
   if (out == &screen) screen.pushSprite(0, 0);
@@ -445,18 +522,35 @@ void loop() {
     const float dx = t.x - (screenW / 2.0f + DISPLAY_OFFSET_X), dy = t.y - (screenH / 2.0f + DISPLAY_OFFSET_Y);
     const float lx = dx * cosf(a) - dy * sinf(a);
     const float ly = dx * sinf(a) + dy * cosf(a);
-    const bool onLever = leverVisible() && fabsf(lx - LEVER_X) < LEVER_ZONE_HALF_W && fabsf(ly) < LEVER_HALF_LEN + LEVER_KNOB_R;
+    const LeverGeom g = leverGeom();
+    const bool onLever = leverVisible() &&
+                         (g.vertical ? (fabsf(lx - g.x) < g.zoneHalfW && fabsf(ly - g.y) < g.halfLen + g.knobR)
+                                     : (fabsf(ly - g.y) < g.zoneHalfW && fabsf(lx - g.x) < g.halfLen + g.knobR));
 
-    if (t.wasClicked() && !onLever && !leverDragging) in.tapped = true;
+    // ---- 縦スワイプでモード切替 (下 = 会議モードへ, 上 = 通常へ)。通常モードのレバー上では無効 ----
+    if (t.wasFlicked() && !(g.vertical && (onLever || leverDragging))) {
+      const float sdx = (float)t.distanceX(), sdy = (float)t.distanceY();
+      const float fly = sdx * sinf(a) + sdy * cosf(a);   // 顔ローカルの縦方向の移動量
+      const float flx = sdx * cosf(a) - sdy * sinf(a);
+      if (fabsf(fly) > SWIPE_MIN_PX && fabsf(fly) > 1.5f * fabsf(flx)) {
+        leverCancel = true;   // このタッチをレバー操作として扱わない
+        setMeetingMode(fly > 0, now);
+      }
+    }
+
+    if (t.wasClicked() && !onLever && !leverDragging && !meetingMode) in.tapped = true;
     if (t.isPressed()) {
       pressed = true;
       motion.touch(now);
       if (onLever || leverDragging) {
         // ---- ミュートレバーをドラッグ中 (顔は反応しない) ----
-        const float pos = (ly + LEVER_HALF_LEN) / (2.0f * LEVER_HALF_LEN);
+        const float along = g.vertical ? (ly - g.y) : (lx - g.x);
+        const float pos = (along + g.halfLen) / (2.0f * g.halfLen);
         leverDragPos = pos < 0 ? 0 : (pos > 1 ? 1 : pos);
-        if (!leverDragging) { leverDragging = true; leverDragStart = leverDragPos; }
+        if (!leverDragging) { leverDragging = true; leverDragStart = leverDragPos; leverCancel = false; }
         mouthTouchStart = 0;
+      } else if (meetingMode) {
+        mouthTouchStart = 0;   // 会議モードでは顔は反応しない
       } else {
         in.touching = true;
         const float R = screenW / 2.0f * 0.75f;
@@ -479,17 +573,25 @@ void loop() {
     leverDragging = false;
     const bool moved = fabsf(leverDragPos - leverDragStart) > 0.15f;
     const bool newMuted = moved ? (leverDragPos > 0.5f) : !micMuted;
-    if (newMuted != micMuted) {
+    if (!leverCancel && newMuted != micMuted) {
       micMuted = newMuted;
       sendHotkey(HID_MUTE_KEY, HID_MUTE_MODS, now);
-      buzz(200, micMuted ? 120 : 40, now);   // ミュートは長め、解除は短め
+      buzz(200, micMuted ? 120 : 40, now);   // ミュートは長め、解除は短め (会議モードでは鳴らない)
+      meetingToggleFlashUntil = now + 350;   // 会議モードは視覚で知らせる
       printf("[hid] mic %s\n", micMuted ? "MUTED" : "on");
     }
+    leverCancel = false;
   }
   if (in.tapped) motion.touch(now);
   in.idleMs = motion.idleMs(now);
   in.moving = in.idleMs < 300;
 
+  if (meetingMode) {
+    // 会議モード: 顔は動かさず、寝もしない (画面を見られる状態を保つ)
+    motion.touch(now);
+    in = FaceInput{};
+    in.dt = dt; in.now = now; in.autoSleepEnabled = false; in.moving = true;
+  }
   face.update(in);
   if (face.takeChomp()) buzz(200, 50, now);   // かじった
 
