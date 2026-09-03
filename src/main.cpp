@@ -11,6 +11,9 @@
 //   BtnB ダブルクリック : 自動で寝る機能の ON/OFF
 //   BtnB 長押し        : 今の向きを「正立」として記憶 (較正)
 //   タップ             : 喜ぶ。触り続けると指を目で追う
+//   口元に指を 2 秒    : 口が出てきてかじろうとする (閉じる瞬間にバイブ)
+//   急な大きい音       : 驚いてキョロキョロ見回す (寝ていても起きる)
+//   音楽               : 目を閉じて音符を流す
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -23,6 +26,7 @@
 #include "config.h"
 #include "orientation.h"
 #include "face.h"
+#include "sound.h"
 
 // ------------------------------------------------------------
 static M5Canvas screen(&M5.Display);
@@ -31,6 +35,7 @@ static Face face;
 static OrientationTracker orient;
 static MotionDetector motion;
 static Preferences prefs;
+static SoundSensor sound;
 
 static uint8_t brightnessIndex = DEFAULT_BRIGHTNESS_INDEX;
 static bool autoSleepEnabled = true;
@@ -42,6 +47,9 @@ static bool lowClock = false;
 static int screenW = 468, screenH = 468;
 static uint16_t furSeed = 12345;
 static uint32_t sleepEnteredMs = 0;
+static uint32_t mouthTouchStart = 0;   // 口元に触れ始めた時刻 (0 = 触れていない)
+static uint32_t vibUntil = 0;          // ノンブロッキングのバイブ停止時刻
+static bool musicShown = false;
 
 static constexpr gpio_num_t WAKE_BUTTON_1 = GPIO_NUM_1;
 static constexpr gpio_num_t WAKE_BUTTON_2 = GPIO_NUM_2;
@@ -67,6 +75,12 @@ static void vibrate(uint8_t level, uint32_t ms) {
   M5.Power.setVibration(0);
 }
 
+// ノンブロッキングのバイブ (loop 内で止める)
+static void buzz(uint8_t level, uint32_t ms, uint32_t now) {
+  M5.Power.setVibration(level);
+  vibUntil = now + ms;
+}
+
 static void applyBrightness() {
   uint8_t b = BRIGHTNESS_LEVELS[brightnessIndex];
   if (face.isSleeping()) b = SLEEP_BRIGHTNESS;
@@ -85,7 +99,7 @@ static void setLowClock(bool enable) {
 // 深い眠り: 画面を消して deep sleep。ボタン (GPIO1/2) または定期タイマで起きる。
 static void enterDeepSleep() {
   puts("[power] entering deep sleep");
-  Serial.flush();
+  sound.end();
   M5.Display.sleep();            // 輝度 0 (フレームバッファ経由だと sleep-in は届かない)
   M5.Display.waitDisplay();
   M5.Imu.sleep();
@@ -178,6 +192,9 @@ static void drawStatus(uint32_t now) {
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "up %lus  imu %s  fps %d", (unsigned long)((now - bootMs) / 1000),
            M5.Imu.isEnabled() ? "ok" : "NONE", (int)(1000 / (FRAME_INTERVAL_AWAKE_MS ? FRAME_INTERVAL_AWAKE_MS : 1)));
+  sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "snd %4.0fdB fl %4.0f sfm %.2f act %.2f%s", sound.levelDb(), sound.floorDb(),
+           sound.flatness(), sound.activeRatio(), sound.isMusic() ? " MUSIC" : "");
   sp.drawString(line, x, y);
 
   // 電池アーク (下部, 左から右へ伸びる)
@@ -258,6 +275,8 @@ void setup() {
   auto cfg = M5.config();
   cfg.internal_imu = true;
   cfg.internal_rtc = true;
+  cfg.internal_mic = SOUND_ENABLED;
+  cfg.internal_spk = false;   // スピーカーはマイクと I2S ピンを共有するので使わない
   cfg.clear_display = true;
   M5.begin(cfg);
   bootMs = millis();
@@ -273,6 +292,7 @@ void setup() {
     M5.Display.setBrightness(0);
     motionCheckAfterTimerWake();   // 動いていなければ戻ってこない
   }
+  if (SOUND_ENABLED) printf("[boot] mic %s\n", sound.begin() ? "ok" : "FAILED");
 
   M5.Display.setRotation(0);
   screenW = M5.Display.width();
@@ -315,6 +335,10 @@ void loop() {
     motion.update(ax, ay, az, gx, gy, gz, now);
   }
 
+  // ---- 音 ----
+  sound.update(now);
+  if (vibUntil && (int32_t)(now - vibUntil) >= 0) { M5.Power.setVibration(0); vibUntil = 0; }
+
   // ---- 入力 ----
   handleButtons(now);
 
@@ -323,6 +347,28 @@ void loop() {
   in.now = now;
   in.shaken = motion.takeShake();
   in.autoSleepEnabled = autoSleepEnabled;
+  in.loudNoise = sound.takeLoud();
+  in.music = sound.isMusic();
+  if (in.loudNoise) {
+    motion.touch(now);
+    buzz(120, 35, now);
+    printf("[snd] loud! %.0f dB (floor %.0f)\n", sound.levelDb(), sound.floorDb());
+  }
+  if (in.music) motion.touch(now);
+  if (in.music != musicShown) {
+    musicShown = in.music;
+    printf("[snd] music %s (active %.2f flatness %.2f)\n", in.music ? "on" : "off", sound.activeRatio(), sound.flatness());
+  }
+  {  // 調整用: 音がしている間だけ 1 秒毎に値を出す
+    static uint32_t lastSndLog = 0;
+    if ((sound.active() || sound.activeRatio() > 0.05f) && now - lastSndLog >= 1000) {
+      lastSndLog = now;
+      printf("[snd] level %.0f floor %.0f sfm %.2f act %.2f std %.1f dc %.0f peak %d pk %.0fHz(%.0f%%) %.0fHz(%.0f%%) %.0fHz(%.0f%%)%s\n",
+             sound.levelDb(), sound.floorDb(), sound.flatness(), sound.activeRatio(), sound.levelStd(), sound.dc(), sound.peak(),
+             sound.peakHz(0), sound.peakShare(0) * 100, sound.peakHz(1), sound.peakShare(1) * 100, sound.peakHz(2), sound.peakShare(2) * 100,
+             in.music ? " MUSIC" : "");
+    }
+  }
 
   if (M5.Touch.isEnabled() && M5.Touch.getCount() > 0) {
     const auto& t = M5.Touch.getDetail(0);
@@ -338,13 +384,23 @@ void loop() {
       const float R = screenW / 2.0f * 0.75f;
       in.touchGazeX = lx / R;
       in.touchGazeY = ly / R;
+      // 口元 (顔ローカル座標) に触れ続けているか
+      const bool inMouthZone = fabsf(lx) < MOUTH_ZONE_HALF_W && ly > MOUTH_ZONE_TOP && ly < MOUTH_ZONE_BOTTOM;
+      if (inMouthZone) {
+        if (mouthTouchStart == 0) mouthTouchStart = now ? now : 1;
+        in.mouthTouchMs = now - mouthTouchStart;
+      } else {
+        mouthTouchStart = 0;
+      }
     }
   }
+  if (!in.touching) mouthTouchStart = 0;
   if (in.tapped) motion.touch(now);
   in.idleMs = motion.idleMs(now);
   in.moving = in.idleMs < 300;
 
   face.update(in);
+  if (face.takeChomp()) buzz(200, 50, now);   // かじった
 
   // ---- 電源まわり ----
   applyBrightness();
@@ -371,7 +427,8 @@ void loop() {
   static uint32_t lastLog = 0;
   if ((int32_t)(now - statusUntil) < 0 && now - lastLog > 500) {
     lastLog = now;
-    printf("[imu] gx=%+.2f gy=%+.2f |a|=%.2f angle=%.1f mood=%d idle=%lu\n", orient.screenGx(), orient.screenGy(),
-                  orient.magnitudeG(), orient.displayAngle(), (int)face.mood(), (unsigned long)in.idleMs);
+    printf("[imu] gx=%+.2f gy=%+.2f |a|=%.2f angle=%.1f mood=%d idle=%lu snd=%.0f/%.0f sfm=%.2f act=%.2f\n",
+                  orient.screenGx(), orient.screenGy(), orient.magnitudeG(), orient.displayAngle(), (int)face.mood(),
+                  (unsigned long)in.idleMs, sound.levelDb(), sound.floorDb(), sound.flatness(), sound.activeRatio());
   }
 }

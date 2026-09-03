@@ -48,6 +48,29 @@ constexpr uint16_t COLOR_ZZZ = 0x9CD3;
 constexpr uint16_t COLOR_UI = 0xC618;
 constexpr uint16_t COLOR_UI_ACCENT = 0x07FF;
 constexpr uint16_t COLOR_TRANSPARENT = 0x0001; // 顔スプライトの透過キー (ほぼ黒。描画には使わない)
+
+// 口 (口元に指を置き続けると出てきて、かじろうとする)
+constexpr uint32_t MOUTH_TOUCH_HOLD_MS = 2000;   // 口元に触れ続けてから口が出るまで
+constexpr int MOUTH_OFFSET_Y = 112;              // 口の中心 (顔中心から下へ)
+constexpr int MOUTH_HALF_W = 120;                // 全開時の口の半幅 (トトロのあくび級)
+constexpr int MOUTH_MAX_OPEN = 150;              // 最大の開き (高さ)
+constexpr int MOUTH_ZONE_HALF_W = 110;           // 「口元」と判定する範囲 (顔ローカル, px)
+constexpr int MOUTH_ZONE_TOP = 50;
+constexpr int MOUTH_ZONE_BOTTOM = 190;
+constexpr uint16_t COLOR_MOUTH = 0x6000;         // 口の中 (暗い赤)
+constexpr uint16_t COLOR_MOUTH_LINE = 0xC618;
+constexpr uint16_t COLOR_TONGUE = 0xF98E;
+constexpr uint16_t COLOR_TEETH = 0xFFFF;
+
+// 音符 (音楽を聴いているとき)
+constexpr int NOTES_MAX = 4;
+constexpr float NOTE_LIFE_SEC = 2.4f;
+constexpr uint32_t NOTE_SPAWN_MS = 520;
+constexpr float NOTE_RISE_PX = 150.0f;
+constexpr uint16_t COLOR_NOTE = 0xFFE0;          // 黄
+
+// 驚いてキョロキョロする時間
+constexpr uint32_t STARTLE_DURATION_MS = 2600;
 // 顔を回転して貼るときにアンチエイリアスをかける (きれいだが重い)。fps が足りなければ false に。
 constexpr bool FACE_ANTIALIAS = true;
 
@@ -96,3 +119,30 @@ constexpr uint32_t BUTTON_HOLD_MS = 1200;          // 長押し判定
 
 // 起動時の挨拶 (バイブ) を鳴らすか
 constexpr bool VIBRATE_ON_BOOT = true;
+
+// ============================================================
+// 6. 音 (マイク)。診断ファームの SOUND モードで値を見ながら調整する
+// ============================================================
+constexpr bool SOUND_ENABLED = true;
+constexpr uint32_t SOUND_SAMPLE_RATE = 16000;
+constexpr int SOUND_BLOCK_SAMPLES = 512;         // 32ms
+constexpr uint8_t SOUND_MIC_GAIN = 16;           // M5Unified の magnification (デジタル)
+constexpr uint8_t SOUND_ES8311_PGA_GAIN = 4;     // ES8311 のアナログ PGA ゲイン 0..10 (3dB 刻み, 4 = 12dB)。M5Unified 既定は 0
+constexpr float SOUND_FLOOR_RISE_RATE = 0.005f;         // 背景フロアが上がる速さ (静かなとき, 1 ブロックあたり)
+constexpr float SOUND_FLOOR_RISE_RATE_ACTIVE = 0.0002f; // 音がしている間 (長い曲でもフロアが追いつかないよう極小)
+// 急な大きい音
+constexpr float SOUND_LOUD_MIN_DB = -32.0f;          // これより小さい音では驚かない [dBFS]
+constexpr float SOUND_LOUD_ABOVE_FLOOR_DB = 14.0f;   // 背景よりこれだけ大きい
+constexpr float SOUND_LOUD_RISE_DB = 8.0f;          // 直前よりこれだけ急に上がった
+constexpr uint32_t SOUND_LOUD_REFRACTORY_MS = 2500;  // 連続で驚かない時間
+// 音楽
+constexpr float SOUND_ACTIVE_ABOVE_FLOOR_DB = 6.0f;  // 「音がしている」判定
+constexpr float SOUND_ACTIVE_MIN_DB = -55.0f;
+constexpr uint32_t SOUND_MUSIC_WINDOW_MS = 4000;     // 継続性を見る窓
+constexpr float SOUND_MUSIC_ACTIVE_RATIO = 0.85f;    // 窓の中でこれ以上の割合で音が続いている
+constexpr float SOUND_MUSIC_FLATNESS_MAX = 0.50f;    // スペクトル平坦度 (ホワイトニング後) がこれ未満 (トーン成分が多い)
+constexpr float SOUND_WHITEN_RATE = 0.0005f;         // 長期平均スペクトルの更新速度 (1 ブロックあたり。~64 秒)
+constexpr float SOUND_MUSIC_LEVEL_STD_MIN = 1.0f;    // 音量の時間変動 [dB] がこの範囲なら音楽らしい (定常ノイズは小さく、しゃべり声は大きい)
+constexpr float SOUND_MUSIC_LEVEL_STD_MAX = 6.0f;
+constexpr uint32_t SOUND_MUSIC_ENTER_MS = 3000;      // 条件がこれだけ続いたら音楽
+constexpr uint32_t SOUND_MUSIC_EXIT_MS = 2000;       // 条件が切れてこれだけ経ったら解除

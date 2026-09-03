@@ -1,4 +1,4 @@
-// 診断ファーム (env:diag): 画面ずれ / IMU 軸 / 顔の描画経路 を実機で確認するツール
+// 診断ファーム (env:diag): 画面ずれ / IMU 軸 / 顔の描画経路 / 音 を実機で確認するツール
 //   pio run -e diag -t upload
 //
 // モード (BtnB クリックで切替):
@@ -7,20 +7,26 @@
 //   1 FACE AA : 本番と同じ経路 (透過スプライト → pushRotatedWithAA → キャンバス) で目を描く。
 //             IMU の角度で回る。緑の枠 = 顔スプライトの境界、白の十字 = 画面中心
 //   2 FACE NOAA : 同上だが pushRotateZoom (AA 無し)
-// シリアル (115200) に 0.5 秒毎 IMU 生値と補正量を出力
+//   3 SOUND : マイクの音量バー (青) / 背景フロア (黄線) / 驚きしきい値 (赤線) / 平坦度 / 継続率 / 音楽判定。
+//             急な大きい音で「LOUD!」が出る。config.h の SOUND_* を調整するときに使う
+// シリアル (115200) に 0.5 秒毎 IMU 生値・補正量・音の値を出力
 #include <M5Unified.h>
 #include <stdio.h>
 #include <math.h>
 #include "../config.h"
 #include "../orientation.h"
+#include "../sound.h"
 
 static M5Canvas canvas(&M5.Display);
 static M5Canvas faceSp(&canvas);
 static OrientationTracker orient;
+static SoundSensor sound;
 static int W, H;
 static int offX = DISPLAY_OFFSET_X, offY = DISPLAY_OFFSET_Y;
 static int mode = 0;
-static const char* MODE_NAMES[] = {"ALIGN", "FACE AA", "FACE NOAA"};
+static const char* MODE_NAMES[] = {"ALIGN", "FACE AA", "FACE NOAA", "SOUND"};
+static constexpr int MODE_COUNT = 4;
+static uint32_t loudFlashUntil = 0;
 
 static void drawAlign() {
   const int cx = W / 2 + offX, cy = H / 2 + offY;
@@ -65,6 +71,8 @@ static void drawFace(bool aa) {
     faceSp.fillEllipse((int)(c + i * EYE_OFFSET_X), (int)(c + EYE_OFFSET_Y), PUPIL_RADIUS, PUPIL_RADIUS, COLOR_PUPIL);
   }
   faceSp.fillTriangle((int)c, (int)(c - 150), (int)(c - 14), (int)(c - 120), (int)(c + 14), (int)(c - 120), TFT_GREEN); // 顔の「上」
+  // 口元の判定範囲 (本番の MOUTH_ZONE_*) を薄く
+  faceSp.drawRect((int)(c - MOUTH_ZONE_HALF_W), (int)(c + MOUTH_ZONE_TOP), MOUTH_ZONE_HALF_W * 2, MOUTH_ZONE_BOTTOM - MOUTH_ZONE_TOP, TFT_DARKGREY);
   canvas.setPivot(cx, cy);
   if (aa) faceSp.pushRotatedWithAA(&canvas, angle, COLOR_TRANSPARENT);
   else    faceSp.pushRotateZoom(&canvas, cx, cy, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
@@ -80,9 +88,53 @@ static void drawFace(bool aa) {
   canvas.pushSprite(0, 0);
 }
 
+static void drawSound(uint32_t now) {
+  const int cx = W / 2 + offX, cy = H / 2 + offY;
+  canvas.fillScreen(TFT_BLACK);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas.setFont(&fonts::Font2);
+  char buf[64];
+
+  if (!sound.running()) {
+    canvas.setFont(&fonts::Font4);
+    canvas.drawString("MIC FAILED", cx, cy);
+    canvas.pushSprite(0, 0);
+    return;
+  }
+  // レベルバー: -90..0 dBFS → 幅 360px
+  const int x0 = cx - 180, barW = 360;
+  auto toX = [&](float db) { if (db < -90) db = -90; if (db > 0) db = 0; return x0 + (int)((db + 90.0f) * (barW / 90.0f)); };
+  canvas.drawRect(x0 - 1, cy - 21, barW + 2, 42, TFT_DARKGREY);
+  canvas.fillRect(x0, cy - 20, toX(sound.levelDb()) - x0, 40, sound.isMusic() ? TFT_GREEN : (sound.active() ? TFT_CYAN : 0x0339));
+  canvas.drawFastVLine(toX(sound.floorDb()), cy - 32, 64, TFT_YELLOW);                               // 背景フロア
+  canvas.drawFastVLine(toX(sound.floorDb() + SOUND_LOUD_ABOVE_FLOOR_DB), cy - 32, 64, TFT_RED);      // 驚きしきい値
+  canvas.drawFastVLine(toX(SOUND_LOUD_MIN_DB), cy - 26, 52, 0x8000);                                 // 驚きの最低音量
+  for (int db = -90; db <= 0; db += 10) canvas.drawFastVLine(toX((float)db), cy + 22, 6, TFT_DARKGREY);
+
+  snprintf(buf, sizeof(buf), "level %5.1f dB   floor %5.1f dB", sound.levelDb(), sound.floorDb());
+  canvas.drawString(buf, cx, cy - 60);
+  snprintf(buf, sizeof(buf), "flatness %.2f (<%.2f)   active %.2f (>%.2f)", sound.flatness(), SOUND_MUSIC_FLATNESS_MAX,
+           sound.activeRatio(), SOUND_MUSIC_ACTIVE_RATIO);
+  canvas.drawString(buf, cx, cy + 50);
+  canvas.setFont(&fonts::Font4);
+  canvas.setTextColor(sound.isMusic() ? TFT_GREEN : TFT_DARKGREY, TFT_BLACK);
+  canvas.drawString(sound.isMusic() ? "MUSIC" : "no music", cx, cy + 90);
+  if ((int32_t)(now - loudFlashUntil) < 0) {
+    canvas.setTextColor(TFT_RED, TFT_BLACK);
+    canvas.drawString("LOUD!", cx, cy - 110);
+  }
+  canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas.setFont(&fonts::Font2);
+  canvas.drawString("SOUND", cx, cy - 150);
+  canvas.pushSprite(0, 0);
+}
+
 void setup() {
   auto cfg = M5.config();
   cfg.internal_imu = true;
+  cfg.internal_mic = true;
+  cfg.internal_spk = false;
   M5.begin(cfg);
   M5.Display.setRotation(0);
   M5.Display.setBrightness(120);
@@ -95,14 +147,15 @@ void setup() {
   faceSp.setColorDepth(16);
   const bool ok2 = faceSp.createSprite(FACE_SIZE, FACE_SIZE);
   faceSp.setPivot(faceSp.width() / 2.0f, faceSp.height() / 2.0f);
+  const bool ok3 = sound.begin();
   delay(1500);
-  printf("\n[diag] board=%d imu=%d psram=%u display=%dx%d touch=%d canvas=%d face=%d\n",
+  printf("\n[diag] board=%d imu=%d psram=%u display=%dx%d touch=%d canvas=%d face=%d mic=%d\n",
          (int)M5.getBoard(), (int)M5.Imu.getType(), (unsigned)ESP.getPsramSize(), W, H,
-         (int)M5.Touch.isEnabled(), (int)ok, (int)ok2);
+         (int)M5.Touch.isEnabled(), (int)ok, (int)ok2, (int)ok3);
 }
 
 void loop() {
-  static uint32_t lastLog = 0, lastLoopUs = 0;
+  static uint32_t lastLog = 0, lastLoopUs = 0, lastSoundDraw = 0;
   static bool dirty = true, dragging = false;
   static int lastX = 0, lastY = 0;
   M5.update();
@@ -116,10 +169,12 @@ void loop() {
     M5.Imu.getAccel(&ax, &ay, &az);
     orient.update(ax, ay, az, dt);
   }
+  sound.update(now);
+  if (sound.takeLoud()) { loudFlashUntil = now + 700; printf("[diag] LOUD %.0f dB (floor %.0f)\n", sound.levelDb(), sound.floorDb()); }
 
   // ---- 入力 ----
   if (M5.BtnB.wasHold())    { offX = 0; offY = 0; dirty = true; printf("[diag] offset reset\n"); }
-  else if (M5.BtnB.wasClicked()) { mode = (mode + 1) % 3; dirty = true; printf("[diag] mode -> %s\n", MODE_NAMES[mode]); }
+  else if (M5.BtnB.wasClicked()) { mode = (mode + 1) % MODE_COUNT; dirty = true; printf("[diag] mode -> %s\n", MODE_NAMES[mode]); }
   if (M5.BtnA.wasClicked()) { offX += 1; dirty = true; printf("[diag] offset -> x=%+d y=%+d\n", offX, offY); }
   if (M5.BtnA.wasHold())    { offY += 1; dirty = true; printf("[diag] offset -> x=%+d y=%+d\n", offX, offY); }
   const auto& t = M5.Touch.getDetail();
@@ -136,11 +191,14 @@ void loop() {
 
   // ---- 描画 ----
   if (mode == 0) { if (dirty) { dirty = false; drawAlign(); } }
+  else if (mode == 3) { if (now - lastSoundDraw >= 50) { lastSoundDraw = now; drawSound(now); } dirty = false; }
   else { drawFace(mode == 1); dirty = false; }
 
   if (now - lastLog > 500) {
     lastLog = now;
-    printf("[imu] ax=%+.2f ay=%+.2f az=%+.2f ang=%.1f off=%+d,%+d mode=%s\n", ax, ay, az, orient.displayAngle(), offX, offY, MODE_NAMES[mode]);
+    printf("[imu] ax=%+.2f ay=%+.2f az=%+.2f ang=%.1f off=%+d,%+d mode=%s snd=%.0f/%.0f sfm=%.2f act=%.2f music=%d\n",
+           ax, ay, az, orient.displayAngle(), offX, offY, MODE_NAMES[mode],
+           sound.levelDb(), sound.floorDb(), sound.flatness(), sound.activeRatio(), (int)sound.isMusic());
   }
-  delay(mode == 0 ? 10 : 33);
+  delay(mode == 0 ? 10 : (mode == 3 ? 5 : 33));
 }

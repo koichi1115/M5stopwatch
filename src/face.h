@@ -4,7 +4,7 @@
 #include <math.h>
 #include "config.h"
 
-enum class Mood : uint8_t { Awake, Drowsy, Sleep, Surprised, Happy };
+enum class Mood : uint8_t { Awake, Drowsy, Sleep, Surprised, Happy, Startled, Music, Bite };
 
 struct FaceInput {
   float dt;              // [s]
@@ -17,6 +17,9 @@ struct FaceInput {
   float touchGazeY;
   uint32_t idleMs;       // 最後に動いてからの時間
   bool autoSleepEnabled;
+  bool loudNoise;        // 急に大きい音がした
+  bool music;            // 音楽が聞こえている
+  uint32_t mouthTouchMs; // 口元に触れ続けている時間 (0 = 触れていない)
 };
 
 class Face {
@@ -46,18 +49,43 @@ public:
     const float dt = in.dt;
     _time += dt;
 
-    // ---- 一時的なリアクション ----
-    if (in.shaken && _mood != Mood::Surprised) {
-      _mood = Mood::Surprised;
-      _reactionUntil = in.now + 1400;
-      _gazeTargetX = 0; _gazeTargetY = 0;
-    } else if (in.tapped && _mood != Mood::Surprised) {
-      _mood = Mood::Happy;
-      _reactionUntil = in.now + 1600;
-    }
-    if ((_mood == Mood::Surprised || _mood == Mood::Happy) && (int32_t)(in.now - _reactionUntil) >= 0) {
+    // ---- 口元に指 (2 秒以上) → 口が出てきてかじろうとする ----
+    if (in.mouthTouchMs >= MOUTH_TOUCH_HOLD_MS) {
+      if (_mood != Mood::Bite) { _mood = Mood::Bite; _mouthCycleStart = in.now; _chompDone = false; }
+    } else if (_mood == Mood::Bite) {
       _mood = Mood::Awake;
       scheduleGaze(in.now);
+    }
+
+    // ---- 一時的なリアクション ----
+    if (_mood != Mood::Bite) {
+      if (in.loudNoise) {
+        _mood = Mood::Startled;              // 驚いてキョロキョロ
+        _reactionUntil = in.now + STARTLE_DURATION_MS;
+        _nextGaze = in.now;
+        _startleSide = (random(2) == 0) ? -1 : 1;
+      } else if (in.shaken && _mood != Mood::Surprised) {
+        _mood = Mood::Surprised;
+        _reactionUntil = in.now + 1400;
+        _gazeTargetX = 0; _gazeTargetY = 0;
+      } else if (in.tapped && _mood != Mood::Surprised && _mood != Mood::Startled) {
+        _mood = Mood::Happy;
+        _reactionUntil = in.now + 1600;
+      }
+    }
+    if ((_mood == Mood::Surprised || _mood == Mood::Happy || _mood == Mood::Startled) && (int32_t)(in.now - _reactionUntil) >= 0) {
+      _mood = Mood::Awake;
+      scheduleGaze(in.now);
+    }
+
+    // ---- 音楽 → 目を閉じて聴き入る ----
+    if (in.music && (_mood == Mood::Awake || _mood == Mood::Drowsy || _mood == Mood::Sleep)) {
+      _mood = Mood::Music;
+      _nextNote = in.now;
+    } else if (!in.music && _mood == Mood::Music) {
+      _mood = Mood::Awake;
+      _wakeUntil = in.now + 900;
+      scheduleBlink(in.now + 600);
     }
 
     // ---- 眠気の状態遷移 ----
@@ -103,6 +131,16 @@ public:
       case Mood::Happy:
         targetOpen = 0.0f; targetBlush = 1.0f; targetEyeScale = 1.05f;
         break;
+      case Mood::Startled:
+        targetOpen = 1.0f; targetEyeScale = 1.18f; targetPupilScale = 0.55f;
+        break;
+      case Mood::Music:
+        targetOpen = 0.0f; targetBlush = 0.35f; targetEyeScale = 1.04f;
+        break;
+      case Mood::Bite:
+        // 大口を開けるほど目は細くなる (トトロのあくび)
+        targetOpen = 0.6f - 0.45f * clamp01(_mouthOpen); targetPupilScale = 1.1f;
+        break;
     }
     const float lidRate = (_mood == Mood::Sleep || _mood == Mood::Drowsy) ? 2.5f : 9.0f;
     _open += (targetOpen - _open) * clamp01(dt * lidRate);
@@ -131,7 +169,19 @@ public:
     }
 
     // ---- 視線 (キョロキョロ) ----
-    if (in.touching) {
+    if (_mood == Mood::Startled) {
+      // 左右に素早く見回す
+      if ((int32_t)(in.now - _nextGaze) >= 0) {
+        _startleSide = -_startleSide;
+        _gazeTargetX = _startleSide * (0.7f + random(30) / 100.0f);
+        _gazeTargetY = (random(100) - 50) / 140.0f;
+        _nextGaze = in.now + 170 + random(160);
+      }
+    } else if (_mood == Mood::Bite) {
+      // 口元の指を見下ろす
+      _gazeTargetX = clampf(in.touchGazeX, -1.0f, 1.0f) * 0.6f;
+      _gazeTargetY = 1.0f;
+    } else if (in.touching) {
       _gazeTargetX = clampf(in.touchGazeX, -1.0f, 1.0f);
       _gazeTargetY = clampf(in.touchGazeY, -1.0f, 1.0f);
       _nextGaze = in.now + 400;
@@ -150,10 +200,49 @@ public:
     } else if ((int32_t)(in.now - _nextGaze) >= 0) {
       scheduleGaze(in.now);
     }
-    const float gazeRate = (_mood == Mood::Drowsy || _mood == Mood::Sleep) ? 2.0f : GAZE_SPEED;
+    const float gazeRate = (_mood == Mood::Drowsy || _mood == Mood::Sleep) ? 2.0f
+                         : (_mood == Mood::Startled ? GAZE_SPEED * 2.2f : GAZE_SPEED);
     _gazeX += (_gazeTargetX - _gazeX) * clamp01(dt * gazeRate);
     _gazeY += (_gazeTargetY - _gazeY) * clamp01(dt * gazeRate);
+
+    // ---- 口 (かじる: 開く → 一瞬止まる → パクッと閉じる → 間) ----
+    {
+      const float visTarget = (_mood == Mood::Bite) ? 1.0f : 0.0f;
+      _mouthVisible += (visTarget - _mouthVisible) * clamp01(dt * (visTarget > _mouthVisible ? 7.0f : 3.0f));
+      if (_mood == Mood::Bite) {
+        const uint32_t T = in.now - _mouthCycleStart;
+        if (T < 650)       _mouthOpen = easeOut(T / 650.0f);          // ぐわっと開く
+        else if (T < 800)  _mouthOpen = 1.0f;                          // 全開で一瞬止まる
+        else if (T < 920)  { _mouthOpen = 1.0f - (T - 800) / 120.0f; if (!_chompDone) { _chompDone = true; _chompPending = true; } }  // パクッ
+        else if (T < 1300) _mouthOpen = 0.0f;
+        else { _mouthCycleStart = in.now; _chompDone = false; }
+      } else {
+        _mouthOpen += (0.0f - _mouthOpen) * clamp01(dt * 8.0f);
+      }
+    }
+
+    // ---- 音符 ----
+    for (auto& n : _notes) {
+      if (n.active) { n.phase += dt / NOTE_LIFE_SEC; if (n.phase >= 1.0f) n.active = false; }
+    }
+    if (_mood == Mood::Music && (int32_t)(in.now - _nextNote) >= 0) {
+      for (auto& n : _notes) {
+        if (n.active) continue;
+        n.active = true;
+        n.phase = 0.0f;
+        n.x = (float)((random(2) ? 1 : -1) * (EYE_OFFSET_X + EYE_RADIUS - 10 + random(40)));
+        n.y = (float)(EYE_OFFSET_Y - EYE_RADIUS + random(40));
+        n.sway = 10.0f + random(14);
+        n.size = 0.8f + random(50) / 100.0f;
+        n.kind = (uint8_t)random(3);
+        break;
+      }
+      _nextNote = in.now + NOTE_SPAWN_MS + random(250);
+    }
   }
+
+  // 口を閉じた瞬間 (バイブ用)。1 回だけ true を返す
+  bool takeChomp() { bool c = _chompPending; _chompPending = false; return c; }
 
   // 顔スプライトに描く (回転は呼び出し側で)
   void draw() {
@@ -161,10 +250,17 @@ public:
     const float s = _scale;
     const float c = _sprite.width() / 2.0f;
     const float open = clamp01(_open * (1.0f - _blinkAmount));
+    float swayX = 0.0f, swayY = 0.0f;
+    if (_mood == Mood::Music) {   // 音楽に合わせてゆらゆら
+      swayX = 6.0f * sinf(_time * 4.8f);
+      swayY = 4.0f * sinf(_time * 9.6f);
+    }
+
+    if (_mouthVisible > 0.02f) drawMouth(c, s);   // 目より先に描く (大口が目に被らないよう目を上に)
 
     for (int i = -1; i <= 1; i += 2) {
-      const float cx = c + i * EYE_OFFSET_X * s;
-      const float cy = c + EYE_OFFSET_Y * s;
+      const float cx = c + (i * EYE_OFFSET_X + swayX) * s;
+      const float cy = c + (EYE_OFFSET_Y + swayY) * s;
       drawEye(cx, cy, open, s);
     }
 
@@ -176,6 +272,7 @@ public:
       }
     }
 
+    drawNotes(c, s);
     if (_mood == Mood::Sleep && _open < 0.15f) drawZzz(c, s);
   }
 
@@ -183,6 +280,7 @@ public:
 
 private:
   static float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  static float easeOut(float t) { t = clamp01(t); return 1.0f - (1.0f - t) * (1.0f - t); }
   static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
   static uint16_t lerpColor(uint16_t a, uint16_t b, float t) {
@@ -225,7 +323,7 @@ private:
     const float er = EYE_RADIUS * s * _eyeScale * _breath;
     const float pr = PUPIL_RADIUS * s * _pupilScale * _breath;
 
-    if (_mood == Mood::Happy) {
+    if (_mood == Mood::Happy || _mood == Mood::Music) {
       // にっこり (^ ^)
       drawCurve(cx, cy + er * 0.25f, er * 0.95f, er * 0.85f, 205, 335, 7.0f * s, COLOR_EYE_WHITE);
       return;
@@ -251,6 +349,73 @@ private:
     if (open > 0.35f) {
       const float hr = pr * 0.24f;
       _sprite.fillCircle((int)(px - pr * 0.36f), (int)(py - pr * 0.36f * open), (int)hr, COLOR_EYE_WHITE);
+    }
+  }
+
+  // 口。閉じているときは薄い笑いの線、開くと赤い口の中と歯と舌
+  void drawMouth(float c, float s) {
+    const float vis = clamp01(_mouthVisible);
+    const float open = clamp01(_mouthOpen);
+    const float mx = c, my = c + MOUTH_OFFSET_Y * s;
+    // 幅も開きに合わせて広がる (閉じているときは半分、全開でトトロのあくび級)
+    const float hw = MOUTH_HALF_W * s * (0.45f + 0.55f * open);
+    const uint16_t lineCol = lerpColor(0x0000, COLOR_MOUTH_LINE, vis);
+    if (open < 0.06f) {
+      drawCurve(mx, my - 6 * s, hw, 10 * s, 20, 160, 5.0f * s, lineCol);
+      return;
+    }
+    const float hh = (6.0f + MOUTH_MAX_OPEN * open) * s * 0.5f;
+    _sprite.fillEllipse((int)mx, (int)my, (int)hw, (int)hh, lerpColor(0x0000, COLOR_MOUTH, vis));
+    // 舌 (下側にどっしり)
+    if (open > 0.25f) {
+      _sprite.fillEllipse((int)mx, (int)(my + hh * 0.55f), (int)(hw * 0.55f), (int)(hh * 0.42f), lerpColor(0x0000, COLOR_TONGUE, vis));
+    }
+    // 歯: 上 8 本、下 6 本。開くほど長く
+    if (open > 0.15f) {
+      const uint16_t teeth = lerpColor(0x0000, COLOR_TEETH, vis);
+      const float tl = (12.0f + 22.0f * open) * s;
+      const int nTop = 8, nBot = 6;
+      for (int k = 0; k < nTop; ++k) {
+        const float u = (k + 0.5f) / nTop * 2.0f - 1.0f;             // -1..1
+        const float x = mx + u * hw * 0.86f;
+        const float edge = sqrtf(1.0f - u * u * 0.74f);              // 楕円の縁に沿わせる
+        const float yTop = my - hh * edge + 2 * s;
+        const float tw = 9.0f * s;
+        _sprite.fillTriangle((int)(x - tw), (int)yTop, (int)(x + tw), (int)yTop, (int)x, (int)(yTop + tl * (0.7f + 0.3f * edge)), teeth);
+      }
+      for (int k = 0; k < nBot; ++k) {
+        const float u = (k + 0.5f) / nBot * 2.0f - 1.0f;
+        const float x = mx + u * hw * 0.72f;
+        const float edge = sqrtf(1.0f - u * u * 0.52f);
+        const float yBot = my + hh * edge - 2 * s;
+        const float tw = 8.0f * s;
+        _sprite.fillTriangle((int)(x - tw), (int)yBot, (int)(x + tw), (int)yBot, (int)x, (int)(yBot - tl * 0.75f * (0.7f + 0.3f * edge)), teeth);
+      }
+    }
+    for (int k = 0; k < 4; ++k) _sprite.drawEllipse((int)mx, (int)my, (int)hw + k, (int)hh + k, lineCol);
+  }
+
+  // 音符 (玉 + 棒 + 旗。kind 2 は連桁の 2 音)。上に昇りながら左右に揺れ、フェードイン/アウト
+  void drawNotes(float c, float s) {
+    for (const auto& n : _notes) {
+      if (!n.active) continue;
+      const float ph = n.phase;
+      float alpha = 1.0f;
+      if (ph < 0.15f) alpha = ph / 0.15f;
+      else if (ph > 0.65f) alpha = (1.0f - ph) / 0.35f;
+      const uint16_t col = lerpColor(0x0000, COLOR_NOTE, clamp01(alpha));
+      const float x = c + (n.x + sinf(ph * 9.42f + n.x) * n.sway) * s;
+      const float y = c + (n.y - ph * NOTE_RISE_PX) * s;
+      const float k = n.size * s;
+      _sprite.fillEllipse((int)x, (int)y, (int)(8 * k), (int)(6 * k), col);
+      _sprite.drawWideLine(x + 7 * k, y, x + 7 * k, y - 26 * k, 2.6f * k, col);
+      if (n.kind == 2) {
+        _sprite.fillEllipse((int)(x + 22 * k), (int)(y - 4 * k), (int)(8 * k), (int)(6 * k), col);
+        _sprite.drawWideLine(x + 29 * k, y - 4 * k, x + 29 * k, y - 30 * k, 2.6f * k, col);
+        _sprite.drawWideLine(x + 7 * k, y - 26 * k, x + 29 * k, y - 30 * k, 4.0f * k, col);
+      } else {
+        _sprite.drawWideLine(x + 7 * k, y - 26 * k, x + 17 * k, y - 16 * k, 3.0f * k, col);
+      }
     }
   }
 
@@ -280,4 +445,14 @@ private:
   uint32_t _nextGaze = 0, _nextBlink = 0, _blinkStart = 0, _reactionUntil = 0, _wakeUntil = 0;
   bool _blinking = false, _doubleBlinkPending = false;
   float _blinkAmount = 0.0f;
+  // 口
+  float _mouthOpen = 0.0f, _mouthVisible = 0.0f;
+  uint32_t _mouthCycleStart = 0;
+  bool _chompDone = false, _chompPending = false;
+  // 驚き
+  int8_t _startleSide = 1;
+  // 音符
+  struct Note { bool active; float x, y, phase, sway, size; uint8_t kind; };
+  Note _notes[NOTES_MAX] = {};
+  uint32_t _nextNote = 0;
 };
