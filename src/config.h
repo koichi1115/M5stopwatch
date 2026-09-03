@@ -8,10 +8,11 @@
 // ============================================================
 // IMU (BMI270) の軸 → 画面の軸 の対応。
 // 画面右方向を +X、画面下方向を +Y とする。
-// 実機到着前なので暫定。ズレは「向きの較正 (BtnB 長押し)」と
-// 「回転方向の反転 (BtnA ダブルクリック)」で再ビルド無しに吸収できる。
-#define ACC_TO_SCREEN_X(ax, ay, az) ((ax))
-#define ACC_TO_SCREEN_Y(ax, ay, az) ((ay))
+// 実測 (2026-09-03): USB を下にして立てると ax=-1.0, 画面を上に寝かせると az=+1.0。
+//   → 画面下 = -ax, 画面右 = -ay (右手系から導出。逆に回るなら BtnA ダブルクリックで反転)
+// 残りのズレは「向きの較正 (BtnB 長押し)」で再ビルド無しに吸収できる。
+#define ACC_TO_SCREEN_X(ax, ay, az) (-(ay))
+#define ACC_TO_SCREEN_Y(ax, ay, az) (-(ax))
 
 // 角度の平滑化の時定数 [秒]。小さいほど機敏、大きいほどヌルっと追従。
 constexpr float ORIENT_FILTER_TAU_SEC = 0.22f;
@@ -26,6 +27,9 @@ constexpr float ORIENT_SNAP_HYSTERESIS_DEG = 12.0f;
 // ============================================================
 // 2. 目・顔の見た目
 // ============================================================
+// 画面の描画中心の補正 [px]。診断ファーム (env:diag) でドラッグして合わせた値。実測 2026-09-03
+constexpr int DISPLAY_OFFSET_X = -2;
+constexpr int DISPLAY_OFFSET_Y = -1;
 constexpr int FACE_SIZE = 380;          // 顔スプライトの一辺 [px] (回転して画面に貼る)
 constexpr int EYE_OFFSET_X = 84;        // 両目の中心からの横オフセット
 constexpr int EYE_OFFSET_Y = 4;         // 目の縦位置 (+で下)

@@ -9,8 +9,9 @@ M5Stack **StopWatch** (ESP32-S3R8 / 1.75" 円形 AMOLED / BMI270 IMU) をカバ�
 - **反応**: 振ると驚く、画面をタップすると喜ぶ (照れ)、触り続けると指を目で追う
 - ボタンで明るさ / 向きの較正 / 回転方向の反転 / 自動就寝の ON-OFF。設定は NVS に保存
 
-> 実機到着前に書いたコードです。**コンパイルは通っています**が実機動作は未確認です。
-> 到着後に確認すべき点を「[到着後のチェックリスト](#到着後のチェックリスト)」にまとめました。
+> 2026-09-03 実機で動作確認済み (顔の表示 / IMU による正立 / タッチ)。
+> IMU の軸対応と画面中心のオフセットは実測値を `config.h` に反映してあります。
+> 未確認の項目は「[到着後のチェックリスト](#到着後のチェックリスト)」を参照。
 
 ---
 
@@ -45,6 +46,21 @@ pio device monitor                # シリアルログ (115200bps, USB CDC)
 - `platformio.ini` は pioarduino 版 platform-espressif32 (Arduino core 3.2.1 / ESP-IDF 5.4) を使用
 - ライブラリは GitHub のタグ (M5GFX 0.2.28 / M5Unified 0.2.21) から取得。レジストリが使えるなら `m5stack/M5Unified@^0.2.21` 形式でも可
 - 書き込みポートが見つからないときは、**ボタンを押しながら USB を挿す**とダウンロードモードに入ります (工場出荷ファームのマニュアルの手順に従ってください)
+
+### 診断ファーム (画面ずれ / IMU 軸 / 描画経路の確認ツール)
+
+```bash
+pio run -e diag -t upload           # src/diag/diag.cpp だけをビルドして書き込む
+pio run -e m5stopwatch -t upload    # 本番ファームに戻す
+```
+
+BtnB クリックでモードが切り替わります。シリアル (115200) に 0.5 秒毎 IMU 生値と補正量を出力します。
+
+| モード | 内容 |
+|---|---|
+| ALIGN | 十字と円。画面をドラッグして縁にぴったり合わせる。表示される `off X Y` を `config.h` の `DISPLAY_OFFSET_X/Y` に入れる。BtnA クリック: 右へ 1px / BtnA 長押し: 下へ 1px / BtnB 長押し: リセット |
+| FACE AA | 本番と同じ経路 (透過スプライト → 回転 → キャンバス) で目と毛を描き、IMU で回す。緑の三角 = 顔の上、緑の枠 = 顔スプライト境界、白の十字 = 画面中心 |
+| FACE NOAA | 同上、アンチエイリアス無し |
 
 ### Arduino IDE でビルドする場合
 
@@ -81,11 +97,10 @@ pio device monitor                # シリアルログ (115200bps, USB CDC)
 
 実機が無いと確定できなかった点です。上から順に潰してください。
 
-1. **起動ログ**: `pio device monitor` で `[Autodetect] board_M5StopWatch` と `[boot] ... imu=6 (bmi270)` が出るか。
-   `imu=0` なら IMU 未検出 → 顔は回らない。
-2. **画面が真っ暗**: `M5.Display.setBrightness` が効いていない可能性。`config.h` の `BRIGHTNESS_LEVELS` を上げる。
-   文字が崩れる → ビルド設定 (`qio_opi`) を確認。
-3. **顔が逆さま / 90° ズレ**: 画面を立てて上にしたい向きにして **BtnB 長押し**。
+1. ~~**起動ログ**~~ 確認済み: `board_M5StopWatch`, `imu=6 (bmi270)`, PSRAM 8MB。
+   (Arduino の `Serial` 出力は USB CDC に届かなかったため、ログは `printf` に変更済み)
+2. ~~**画面が真っ暗**~~ 確認済み (文字も崩れない)。
+3. ~~**顔が逆さま / 90° ズレ**~~ 実測で `ACC_TO_SCREEN_X/Y` を修正済み (USB 下で正立)。別の向きにしたければ **BtnB 長押し**。
 4. **傾けると逆に回る**: **BtnA ダブルクリック**で反転。(較正の前後どちらでも可)
 5. **ボタンの物理配置**: どれが BtnA(GPIO2)/BtnB(GPIO1) か確認。逆が良ければ `main.cpp` の `handleButtons()` で入れ替え。
 6. **fps**: ステータス表示中に動きがカクつくなら `config.h` の `FACE_ANTIALIAS = false`、それでも重ければ `FACE_SIZE` を小さく。
@@ -142,6 +157,7 @@ src/config.h          調整パラメータ
 src/orientation.h     姿勢トラッカ (重力→回転角, 較正, 反転, スナップ) と動き検出
 src/face.h            顔の描画と気分の状態機械 (起床 / 眠い / 就寝 / 驚き / 喜び)
 src/main.cpp          入力 (ボタン, タッチ, IMU), 電源管理 (輝度, CPU クロック, deep sleep), 描画ループ
+src/diag/diag.cpp     診断ファーム (env:diag)。画面ずれ / IMU 軸 / 描画経路の確認
 tools/export_arduino_sketch.sh   Arduino IDE 用スケッチを生成
 tools/preview_face.py            顔レイアウトの PNG プレビュー
 ```

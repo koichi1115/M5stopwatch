@@ -17,6 +17,7 @@
 #include <utility/M5IOE1_Class.hpp>
 #include <Preferences.h>
 #include <esp_sleep.h>
+#include <stdio.h>
 #include <driver/rtc_io.h>
 
 #include "config.h"
@@ -83,7 +84,7 @@ static void setLowClock(bool enable) {
 // ------------------------------------------------------------
 // 深い眠り: 画面を消して deep sleep。ボタン (GPIO1/2) または定期タイマで起きる。
 static void enterDeepSleep() {
-  Serial.println("[power] entering deep sleep");
+  puts("[power] entering deep sleep");
   Serial.flush();
   M5.Display.sleep();            // 輝度 0 (フレームバッファ経由だと sleep-in は届かない)
   M5.Display.waitDisplay();
@@ -127,14 +128,14 @@ static void motionCheckAfterTimerWake() {
     }
     delay(5);
   }
-  Serial.printf("[power] timer wake, moved=%d\n", moved);
+  printf("[power] timer wake, moved=%d\n", moved);
   if (!moved) enterDeepSleep();
 }
 
 // ------------------------------------------------------------
 static void drawFur(float angleDeg) {
   // 画面の縁に生える毛。顔と一緒に回す。
-  const float cx = screenW / 2.0f, cy = screenH / 2.0f;
+  const float cx = screenW / 2.0f + DISPLAY_OFFSET_X, cy = screenH / 2.0f + DISPLAY_OFFSET_Y;
   const float R = (screenW < screenH ? screenW : screenH) / 2.0f + 2.0f;
   uint32_t seed = furSeed;
   auto rnd = [&seed]() { seed = seed * 1103515245u + 12345u; return (seed >> 16) & 0x7FFF; };
@@ -205,7 +206,7 @@ static void render(uint32_t now) {
   out->fillScreen(TFT_BLACK);
   drawFur(angle);
   if (FACE_ANTIALIAS) face.sprite().pushRotatedWithAA(out, angle, COLOR_TRANSPARENT);
-  else face.sprite().pushRotateZoom(out, screenW / 2.0f, screenH / 2.0f, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
+  else face.sprite().pushRotateZoom(out, screenW / 2.0f + DISPLAY_OFFSET_X, screenH / 2.0f + DISPLAY_OFFSET_Y, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
   if (out == &screen) screen.pushSprite(0, 0);
   else M5.Display.endWrite();
 }
@@ -218,13 +219,13 @@ static void handleButtons(uint32_t now) {
     saveOrientation();
     statusUntil = now + STATUS_OVERLAY_MS;
     vibrate(150, 60);
-    Serial.printf("[cfg] rotation sign -> %+d\n", orient.sign());
+    printf("[cfg] rotation sign -> %+d\n", orient.sign());
   } else if (M5.BtnA.wasHold()) {
     brightnessIndex = (brightnessIndex + 1) % sizeof(BRIGHTNESS_LEVELS);
     prefs.putUChar("bri", brightnessIndex);
     statusUntil = now + 1500;
     vibrate(120, 40);
-    Serial.printf("[cfg] brightness -> %d\n", BRIGHTNESS_LEVELS[brightnessIndex]);
+    printf("[cfg] brightness -> %d\n", BRIGHTNESS_LEVELS[brightnessIndex]);
   } else if (M5.BtnA.wasClicked()) {
     statusUntil = now + STATUS_OVERLAY_MS;
     motion.touch(now);
@@ -236,15 +237,15 @@ static void handleButtons(uint32_t now) {
     prefs.putBool("asleep", autoSleepEnabled);
     statusUntil = now + STATUS_OVERLAY_MS;
     vibrate(150, 60);
-    Serial.printf("[cfg] autosleep -> %d\n", autoSleepEnabled);
+    printf("[cfg] autosleep -> %d\n", autoSleepEnabled);
   } else if (M5.BtnB.wasHold()) {
     if (orient.calibrate()) {
       saveOrientation();
       vibrate(200, 80); delay(80); vibrate(200, 80);
-      Serial.printf("[cfg] calibrated: offset=%.1f sign=%+d\n", orient.offset(), orient.sign());
+      printf("[cfg] calibrated: offset=%.1f sign=%+d\n", orient.offset(), orient.sign());
     } else {
       vibrate(90, 250);
-      Serial.println("[cfg] calibration failed: hold the device upright (screen vertical)");
+      puts("[cfg] calibration failed: hold the device upright (screen vertical)");
     }
     statusUntil = now + STATUS_OVERLAY_MS;
   } else if (M5.BtnB.wasClicked()) {
@@ -261,7 +262,7 @@ void setup() {
   M5.begin(cfg);
   bootMs = millis();
 
-  Serial.printf("\n[boot] M5Unified board=%d imu=%d psram=%u\n", (int)M5.getBoard(), (int)M5.Imu.getType(), (unsigned)ESP.getPsramSize());
+  printf("\n[boot] M5Unified board=%d imu=%d psram=%u\n", (int)M5.getBoard(), (int)M5.Imu.getType(), (unsigned)ESP.getPsramSize());
 
   M5.BtnA.setHoldThresh(BUTTON_HOLD_MS);
   M5.BtnB.setHoldThresh(BUTTON_HOLD_MS);
@@ -279,12 +280,12 @@ void setup() {
   screen.setPsram(true);
   screen.setColorDepth(16);
   if (!screen.createSprite(screenW, screenH)) {
-    Serial.println("[boot] screen sprite alloc failed (PSRAM?) - drawing directly");
+    puts("[boot] screen sprite alloc failed (PSRAM?) - drawing directly");
     out = &M5.Display;
   }
-  out->setPivot(screenW / 2.0f, screenH / 2.0f);
+  out->setPivot(screenW / 2.0f + DISPLAY_OFFSET_X, screenH / 2.0f + DISPLAY_OFFSET_Y);
   if (!face.begin()) {
-    Serial.println("[boot] face sprite alloc failed");
+    puts("[boot] face sprite alloc failed");
   }
   furSeed = (uint16_t)esp_random();
   randomSeed(esp_random());
@@ -294,7 +295,7 @@ void setup() {
   motion.touch(millis());
   if (VIBRATE_ON_BOOT && cause != ESP_SLEEP_WAKEUP_TIMER) vibrate(160, 70);
   lastLoopUs = micros();
-  Serial.printf("[boot] display %dx%d, sign=%+d offset=%.1f\n", screenW, screenH, orient.sign(), orient.offset());
+  printf("[boot] display %dx%d, sign=%+d offset=%.1f\n", screenW, screenH, orient.sign(), orient.offset());
 }
 
 void loop() {
@@ -331,7 +332,7 @@ void loop() {
       motion.touch(now);
       // タッチ座標 → 顔ローカル座標 (顔の回転を打ち消す)
       const float a = -orient.displayAngle() * OrientationTracker::kDegToRad;
-      const float dx = t.x - screenW / 2.0f, dy = t.y - screenH / 2.0f;
+      const float dx = t.x - (screenW / 2.0f + DISPLAY_OFFSET_X), dy = t.y - (screenH / 2.0f + DISPLAY_OFFSET_Y);
       const float lx = dx * cosf(a) - dy * sinf(a);
       const float ly = dx * sinf(a) + dy * cosf(a);
       const float R = screenW / 2.0f * 0.75f;
@@ -370,7 +371,7 @@ void loop() {
   static uint32_t lastLog = 0;
   if ((int32_t)(now - statusUntil) < 0 && now - lastLog > 500) {
     lastLog = now;
-    Serial.printf("[imu] gx=%+.2f gy=%+.2f |a|=%.2f angle=%.1f mood=%d idle=%lu\n", orient.screenGx(), orient.screenGy(),
+    printf("[imu] gx=%+.2f gy=%+.2f |a|=%.2f angle=%.1f mood=%d idle=%lu\n", orient.screenGx(), orient.screenGy(),
                   orient.magnitudeG(), orient.displayAngle(), (int)face.mood(), (unsigned long)in.idleMs);
   }
 }

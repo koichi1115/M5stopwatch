@@ -1,0 +1,146 @@
+// 診断ファーム (env:diag): 画面ずれ / IMU 軸 / 顔の描画経路 を実機で確認するツール
+//   pio run -e diag -t upload
+//
+// モード (BtnB クリックで切替):
+//   0 ALIGN : 十字と円。画面をドラッグして縁にぴったり合わせる → 「off X Y」が DISPLAY_OFFSET_X/Y
+//             BtnA クリック: 右へ 1px / BtnA 長押し: 下へ 1px / BtnB 長押し: リセット
+//   1 FACE AA : 本番と同じ経路 (透過スプライト → pushRotatedWithAA → キャンバス) で目を描く。
+//             IMU の角度で回る。緑の枠 = 顔スプライトの境界、白の十字 = 画面中心
+//   2 FACE NOAA : 同上だが pushRotateZoom (AA 無し)
+// シリアル (115200) に 0.5 秒毎 IMU 生値と補正量を出力
+#include <M5Unified.h>
+#include <stdio.h>
+#include <math.h>
+#include "../config.h"
+#include "../orientation.h"
+
+static M5Canvas canvas(&M5.Display);
+static M5Canvas faceSp(&canvas);
+static OrientationTracker orient;
+static int W, H;
+static int offX = DISPLAY_OFFSET_X, offY = DISPLAY_OFFSET_Y;
+static int mode = 0;
+static const char* MODE_NAMES[] = {"ALIGN", "FACE AA", "FACE NOAA"};
+
+static void drawAlign() {
+  const int cx = W / 2 + offX, cy = H / 2 + offY;
+  canvas.fillScreen(TFT_BLACK);
+  canvas.drawCircle(cx, cy, 232, TFT_WHITE);
+  canvas.drawCircle(cx, cy, 231, TFT_WHITE);
+  canvas.drawCircle(cx, cy, 200, TFT_DARKGREY);
+  canvas.drawLine(cx - 232, cy, cx + 232, cy, TFT_WHITE);
+  canvas.drawLine(cx, cy - 232, cx, cy + 232, TFT_WHITE);
+  canvas.fillCircle(cx + 150, cy, 18, TFT_RED);      // 右 = 赤
+  canvas.fillCircle(cx, cy - 150, 18, TFT_GREEN);    // 上 = 緑
+  canvas.fillCircle(cx - 150, cy, 18, TFT_BLUE);     // 左 = 青
+  canvas.fillCircle(cx, cy + 150, 18, TFT_YELLOW);   // 下 = 黄
+  canvas.setTextDatum(middle_center);
+  canvas.setFont(&fonts::Font4);
+  canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+  char buf[48];
+  snprintf(buf, sizeof(buf), "off %+d %+d", offX, offY);
+  canvas.drawString(buf, cx, cy - 40);
+  canvas.setFont(&fonts::Font2);
+  canvas.drawString("ALIGN: drag to fit", cx, cy + 40);
+  canvas.pushSprite(0, 0);
+}
+
+static void drawFace(bool aa) {
+  const float cx = W / 2.0f + offX, cy = H / 2.0f + offY;
+  const float angle = orient.displayAngle();
+  canvas.fillScreen(TFT_BLACK);
+  // 本番と同じ毛
+  const float R = (W < H ? W : H) / 2.0f + 2.0f;
+  for (int i = 0; i < FUR_COUNT; ++i) {
+    const float a = (angle + i * (360.0f / FUR_COUNT)) * 0.01745329f;
+    const float len = FUR_MIN_LEN + (i * 7) % (FUR_MAX_LEN - FUR_MIN_LEN + 1);
+    canvas.drawWideLine(cx + cosf(a) * R, cy + sinf(a) * R, cx + cosf(a) * (R - len), cy + sinf(a) * (R - len), 2.0f, COLOR_FUR);
+  }
+  // 顔スプライト: 透過背景 + 目 + 境界 (緑)
+  const float c = faceSp.width() / 2.0f;
+  faceSp.fillScreen(COLOR_TRANSPARENT);
+  faceSp.drawRect(0, 0, faceSp.width(), faceSp.height(), TFT_GREEN);
+  for (int i = -1; i <= 1; i += 2) {
+    faceSp.fillEllipse((int)(c + i * EYE_OFFSET_X), (int)(c + EYE_OFFSET_Y), EYE_RADIUS, EYE_RADIUS, COLOR_EYE_WHITE);
+    faceSp.fillEllipse((int)(c + i * EYE_OFFSET_X), (int)(c + EYE_OFFSET_Y), PUPIL_RADIUS, PUPIL_RADIUS, COLOR_PUPIL);
+  }
+  faceSp.fillTriangle((int)c, (int)(c - 150), (int)(c - 14), (int)(c - 120), (int)(c + 14), (int)(c - 120), TFT_GREEN); // 顔の「上」
+  canvas.setPivot(cx, cy);
+  if (aa) faceSp.pushRotatedWithAA(&canvas, angle, COLOR_TRANSPARENT);
+  else    faceSp.pushRotateZoom(&canvas, cx, cy, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
+  // 画面中心の十字 (白)
+  canvas.drawLine(cx - 30, cy, cx + 30, cy, TFT_WHITE);
+  canvas.drawLine(cx, cy - 30, cx, cy + 30, TFT_WHITE);
+  canvas.setTextDatum(middle_center);
+  canvas.setFont(&fonts::Font2);
+  canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+  char buf[48];
+  snprintf(buf, sizeof(buf), "%s  ang %.0f", aa ? "FACE AA" : "FACE NOAA", angle);
+  canvas.drawString(buf, cx, cy + 200);
+  canvas.pushSprite(0, 0);
+}
+
+void setup() {
+  auto cfg = M5.config();
+  cfg.internal_imu = true;
+  M5.begin(cfg);
+  M5.Display.setRotation(0);
+  M5.Display.setBrightness(120);
+  W = M5.Display.width();
+  H = M5.Display.height();
+  canvas.setPsram(true);
+  canvas.setColorDepth(16);
+  const bool ok = canvas.createSprite(W, H);
+  faceSp.setPsram(true);
+  faceSp.setColorDepth(16);
+  const bool ok2 = faceSp.createSprite(FACE_SIZE, FACE_SIZE);
+  faceSp.setPivot(faceSp.width() / 2.0f, faceSp.height() / 2.0f);
+  delay(1500);
+  printf("\n[diag] board=%d imu=%d psram=%u display=%dx%d touch=%d canvas=%d face=%d\n",
+         (int)M5.getBoard(), (int)M5.Imu.getType(), (unsigned)ESP.getPsramSize(), W, H,
+         (int)M5.Touch.isEnabled(), (int)ok, (int)ok2);
+}
+
+void loop() {
+  static uint32_t lastLog = 0, lastLoopUs = 0;
+  static bool dirty = true, dragging = false;
+  static int lastX = 0, lastY = 0;
+  M5.update();
+  const uint32_t now = millis();
+  const uint32_t nowUs = micros();
+  float dt = (nowUs - lastLoopUs) * 1e-6f; lastLoopUs = nowUs;
+  if (dt > 0.2f) dt = 0.2f;
+
+  float ax = 0, ay = 0, az = 0;
+  if (M5.Imu.isEnabled() && M5.Imu.update()) {
+    M5.Imu.getAccel(&ax, &ay, &az);
+    orient.update(ax, ay, az, dt);
+  }
+
+  // ---- 入力 ----
+  if (M5.BtnB.wasHold())    { offX = 0; offY = 0; dirty = true; printf("[diag] offset reset\n"); }
+  else if (M5.BtnB.wasClicked()) { mode = (mode + 1) % 3; dirty = true; printf("[diag] mode -> %s\n", MODE_NAMES[mode]); }
+  if (M5.BtnA.wasClicked()) { offX += 1; dirty = true; printf("[diag] offset -> x=%+d y=%+d\n", offX, offY); }
+  if (M5.BtnA.wasHold())    { offY += 1; dirty = true; printf("[diag] offset -> x=%+d y=%+d\n", offX, offY); }
+  const auto& t = M5.Touch.getDetail();
+  if (t.isPressed()) {
+    if (!dragging) { dragging = true; lastX = t.x; lastY = t.y; }
+    else {
+      const int dx = t.x - lastX, dy = t.y - lastY;
+      if (dx || dy) { offX += dx; offY += dy; lastX = t.x; lastY = t.y; dirty = true; }
+    }
+  } else if (dragging) {
+    dragging = false;
+    printf("[diag] offset -> x=%+d y=%+d\n", offX, offY);
+  }
+
+  // ---- 描画 ----
+  if (mode == 0) { if (dirty) { dirty = false; drawAlign(); } }
+  else { drawFace(mode == 1); dirty = false; }
+
+  if (now - lastLog > 500) {
+    lastLog = now;
+    printf("[imu] ax=%+.2f ay=%+.2f az=%+.2f ang=%.1f off=%+d,%+d mode=%s\n", ax, ay, az, orient.displayAngle(), offX, offY, MODE_NAMES[mode]);
+  }
+  delay(mode == 0 ? 10 : 33);
+}
