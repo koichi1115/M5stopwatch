@@ -7,3 +7,6 @@ __pycache__/
 arduino_sketch/
 
 backup/
+
+# Wi-Fi の認証情報 (secrets.example.h をコピーして作る)
+src/secrets.h

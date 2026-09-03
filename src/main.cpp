@@ -28,6 +28,7 @@
 #include "face.h"
 #include "sound.h"
 #include "hid.h"
+#include "pass.h"
 
 // ------------------------------------------------------------
 static M5Canvas screen(&M5.Display);
@@ -61,6 +62,11 @@ static bool leverCancel = false;       // スワイプでモード切替した�
 // 会議モード
 static bool meetingMode = false;
 static uint32_t meetingToggleFlashUntil = 0;
+// チケット (QR) モード
+static PassManager pass;
+static bool passMode = false;
+static uint32_t passHoldStart = 0;     // QR 長押し (削除) の開始時刻
+static bool passHoldDone = false;
 
 // レバーの形 (顔ローカル座標)。通常 = 顔の右に縦、会議モード = 中央に横
 struct LeverGeom { float x, y; bool vertical; float halfLen, knobR, zoneHalfW; };
@@ -136,7 +142,8 @@ static void sendHotkey(uint8_t key, uint8_t mods, uint32_t now) {
 
 static void applyBrightness() {
   uint8_t b = BRIGHTNESS_LEVELS[brightnessIndex];
-  if (meetingMode) b = (uint8_t)((uint32_t)b * MEET_BRIGHTNESS_PERCENT / 100);
+  if (passMode) b = PASS_BRIGHTNESS;            // QR はスキャナ向けに最大
+  else if (meetingMode) b = (uint8_t)((uint32_t)b * MEET_BRIGHTNESS_PERCENT / 100);
   else if (face.isSleeping()) b = SLEEP_BRIGHTNESS;
   else if (face.isDrowsy()) b = (uint8_t)((uint32_t)b * DROWSY_BRIGHTNESS_SCALE_PERCENT / 100);
   if (b < 4) b = 4;
@@ -155,6 +162,7 @@ static void enterDeepSleep() {
   puts("[power] entering deep sleep");
   sound.end();
   kb.end();
+  pass.stopReceive();
   M5.Display.sleep();            // 輝度 0 (フレームバッファ経由だと sleep-in は届かない)
   M5.Display.waitDisplay();
   M5.Imu.sleep();
@@ -327,7 +335,7 @@ static void drawStatus(uint32_t now) {
            sound.flatness(), sound.activeRatio(), sound.isMusic() ? " MUSIC" : "");
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "ble %s  mic %s%s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
-           micMuted ? "MUTED" : "on", meetingMode ? "  MEETING" : "");
+           micMuted ? "MUTED" : "on", meetingMode ? "  MEETING" : (passMode ? "  PASS" : ""));
   sp.drawString(line, x, y);
 
   // 電池アーク (下部, 左から右へ伸びる)
@@ -349,7 +357,10 @@ static void drawStatus(uint32_t now) {
 
 static void render(uint32_t now) {
   const float angle = orient.displayAngle();
-  if (meetingMode) {
+  if (passMode) {
+    face.sprite().fillScreen(COLOR_TRANSPARENT);
+    pass.draw(face.sprite(), face.sprite().width() / 2.0f, now);
+  } else if (meetingMode) {
     drawMeeting(now);
   } else {
     face.draw();
@@ -359,7 +370,7 @@ static void render(uint32_t now) {
 
   if (out != &screen) M5.Display.startWrite();
   out->fillScreen(TFT_BLACK);
-  if (!meetingMode) drawFur(angle);
+  if (!meetingMode && !passMode) drawFur(angle);
   if (FACE_ANTIALIAS) face.sprite().pushRotatedWithAA(out, angle, COLOR_TRANSPARENT);
   else face.sprite().pushRotateZoom(out, screenW / 2.0f + DISPLAY_OFFSET_X, screenH / 2.0f + DISPLAY_OFFSET_Y, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
   if (out == &screen) screen.pushSprite(0, 0);
@@ -423,6 +434,7 @@ void setup() {
   M5.BtnA.setHoldThresh(BUTTON_HOLD_MS);
   M5.BtnB.setHoldThresh(BUTTON_HOLD_MS);
   loadSettings();
+  if (PASS_ENABLED) { pass.begin(); printf("[boot] passes: %d\n", pass.count()); }
 
   const auto cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_TIMER) {
@@ -541,14 +553,48 @@ void loop() {
       const float sdx = (float)t.distanceX(), sdy = (float)t.distanceY();
       const float fly = sdx * sinf(a) + sdy * cosf(a);   // 顔ローカルの縦方向の移動量
       const float flx = sdx * cosf(a) - sdy * sinf(a);
-      if (fabsf(fly) > SWIPE_MIN_PX && fabsf(fly) > 1.5f * fabsf(flx)) {
+      if (passMode) {
+        // チケットモード: 左右で戻る、上下で次 / 前のチケット
+        if (fabsf(flx) > SWIPE_MIN_PX && fabsf(flx) > 1.5f * fabsf(fly)) { passMode = false; pass.stopReceive(); buzz(120, 40, now); puts("[mode] pass off"); }
+        else if (fabsf(fly) > SWIPE_MIN_PX && fabsf(fly) > 1.5f * fabsf(flx)) { if (fly > 0) pass.next(); else pass.prev(); }
+        passHoldStart = 0;
+      } else if (fabsf(fly) > SWIPE_MIN_PX && fabsf(fly) > 1.5f * fabsf(flx)) {
         leverCancel = true;   // このタッチをレバー操作として扱わない
         setMeetingMode(fly > 0, now);
+      } else if (PASS_ENABLED && !meetingMode && fabsf(flx) > SWIPE_MIN_PX && fabsf(flx) > 1.5f * fabsf(fly)) {
+        passMode = true;      // 左右スワイプでチケットモードへ
+        passHoldStart = 0;
+        buzz(120, 40, now);
+        statusUntil = 0;
+        puts("[mode] pass ON");
       }
     }
 
-    if (t.wasClicked() && !onLever && !leverDragging && !meetingMode) in.tapped = true;
-    if (t.isPressed()) {
+    if (passMode) {
+      // タップ: 受信の開始 / 停止。長押し: 表示中のチケットを削除
+      if (t.wasClicked()) {
+        if (pass.receiving()) pass.stopReceive();
+        else pass.startReceive(now);
+        buzz(100, 30, now);
+      }
+      if (t.isPressed()) {
+        pressed = true;
+        motion.touch(now);
+        sound.suppressLoudUntil(now + SOUND_SUPPRESS_AFTER_TOUCH_MS);
+        if (passHoldStart == 0) { passHoldStart = now ? now : 1; passHoldDone = false; }
+        else if (!passHoldDone && now - passHoldStart > PASS_DELETE_HOLD_MS && pass.count() > 0 && !pass.receiving()) {
+          passHoldDone = true;
+          pass.removeCurrent();
+          buzz(200, 120, now);
+          printf("[pass] deleted, %d left\n", pass.count());
+        }
+      } else {
+        passHoldStart = 0;
+      }
+    }
+
+    if (t.wasClicked() && !onLever && !leverDragging && !meetingMode && !passMode) in.tapped = true;
+    if (t.isPressed() && !passMode) {
       pressed = true;
       motion.touch(now);
       sound.suppressLoudUntil(now + SOUND_SUPPRESS_AFTER_TOUCH_MS);   // タッチ音で驚かない
@@ -596,11 +642,17 @@ void loop() {
   in.idleMs = motion.idleMs(now);
   in.moving = in.idleMs < 300;
 
-  if (meetingMode) {
-    // 会議モード: 顔は動かさず、寝もしない (画面を見られる状態を保つ)
+  if (meetingMode || passMode) {
+    // 会議モード / チケットモード: 顔は動かさず、寝もしない (画面を見られる状態を保つ)
     motion.touch(now);
     in = FaceInput{};
     in.dt = dt; in.now = now; in.autoSleepEnabled = false; in.moving = true;
+  }
+  // ---- チケット受信 (Wi-Fi) ----
+  pass.update(now);
+  if (pass.takeReceived()) {
+    buzz(180, 60, now);
+    printf("[pass] now %d passes, showing #%d\n", pass.count(), pass.current() + 1);
   }
   face.update(in);
   if (face.takeChomp()) buzz(200, 50, now);   // かじった

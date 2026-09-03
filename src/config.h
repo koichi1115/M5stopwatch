@@ -186,3 +186,18 @@ constexpr int MEET_LEVER_KNOB_R = 40;
 constexpr int MEET_LEVER_ZONE_HALF_W = 95;       // タッチ判定の半分の高さ
 constexpr uint8_t MEET_BRIGHTNESS_PERCENT = 70;  // 通常の明るさに対する割合
 constexpr bool MEET_SILENT = true;               // 会議モード中はバイブを一切鳴らさない (マイクに乗るため)
+
+// ============================================================
+// 9. チケット (QR) モード。通常モードから左右スワイプで入る / もう一度左右スワイプで戻る
+//    iPhone のショートカットから Wallet の .pkpass やスクリーンショットを Wi-Fi で受け取り、QR を描き直して表示
+// ============================================================
+constexpr bool PASS_ENABLED = true;
+constexpr int PASS_MAX = 8;                      // 保存する枚数 (NVS)
+constexpr const char* PASS_HOSTNAME = "makkuro"; // http://makkuro.local/pass
+constexpr uint32_t PASS_WIFI_TIMEOUT_MS = 180UL * 1000;   // 受信待ちを自動で止めるまで (最後の通信から)
+constexpr uint32_t PASS_WIFI_CONNECT_TIMEOUT_MS = 20000;
+constexpr uint8_t PASS_BRIGHTNESS = 255;         // QR 表示中はスキャナ向けに最大
+constexpr int PASS_QR_MAX_PX = 300;              // QR の最大辺 (顔スプライト 380 の中)
+constexpr int PASS_QR_QUIET_PX = 14;             // 白い余白
+constexpr uint32_t PASS_DELETE_HOLD_MS = 1500;   // QR を長押しで削除
+constexpr size_t PASS_MAX_UPLOAD_BYTES = 3UL * 1024 * 1024;   // 受け付ける最大サイズ (PSRAM)

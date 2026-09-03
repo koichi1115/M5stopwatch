@@ -9,7 +9,8 @@ M5Stack **StopWatch** (ESP32-S3R8 / 1.75" 円形 AMOLED / BMI270 IMU) をカバ�
 - **反応**: 振ると驚く、画面をタップすると喜ぶ (照れ)、触り続けると指を目で追う
 - **音に反応** (マイク): 急に大きい音がすると驚いてキョロキョロ見回す (寝ていても起きる)。音楽が聞こえると目を閉じて音符を流す
 - **かじる**: 口元に指を 2 秒以上置くと口が出てきて、大きく開けてパクッと閉じる (閉じる瞬間にバイブ)
-- **PC のリモコン** (BLE キーボード): PC にペアリングすると、画面のレバーで Teams 等のマイクをミュート/解除 (Win+Alt+K)、BtnA で Alt+Tab、BtnB で無変換キー (音声入力) を送る
+- **PC のリモコン** (BLE キーボード): PC にペアリングすると、会議モードのトグルで Teams のマイクをミュート/解除 (Alt+A)、BtnA で Alt+Tab、BtnB で無変換キー (音声入力) を送る
+- **QR チケット**: iPhone の Wallet のパス (.pkpass) やスクリーンショットをショートカットから Wi-Fi で受け取り、QR を描き直して表示。左右スワイプでチケットモード
 - ボタンで明るさ / 向きの較正 / 回転方向の反転 / 自動就寝の ON-OFF。設定は NVS に保存
 
 > 2026-09-03 実機で動作確認済み (顔の表示 / IMU による正立 / タッチ)。
@@ -158,6 +159,7 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 | 口 | `MOUTH_TOUCH_HOLD_MS`, `MOUTH_ZONE_*` (判定範囲), `MOUTH_OFFSET_Y`, `MOUTH_MAX_OPEN` |
 | 音符 | `NOTE_*`, `COLOR_NOTE` |
 | PC に送るキー / レバーの位置 | `HID_MUTE_*`, `HID_BTN_A_*`, `HID_BTN_B_*`, `LEVER_*`。`HID_ENABLED = false` で BLE 無効 |
+| QR チケット | `PASS_MAX` (枚数), `PASS_HOSTNAME` (makkuro.local), `PASS_WIFI_TIMEOUT_MS`, `PASS_QR_MAX_PX`。Wi-Fi は `src/secrets.h`。`PASS_ENABLED = false` で無効 |
 
 `tools/preview_face.py` (要 Pillow) で顔レイアウトの静止画プレビューを出せます (幾何を Python で再現したもので、実機描画そのものではありません)。
 
@@ -172,6 +174,10 @@ src/orientation.h     姿勢トラッカ (重力→回転角, 較正, 反転, �
 src/face.h            顔の描画と気分の状態機械 (起床 / 眠い / 就寝 / 驚き / 喜び / びっくり / 音楽 / かじる)
 src/sound.h           音センサ (音量・背景フロア・スペクトル平坦度 → 急な大きい音 / 音楽の判定)
 src/hid.h             BLE HID キーボード (NimBLE)。PC にショートカットを送る
+src/pass.h            QR チケット (NVS 保存, QR 描画, Wi-Fi 受信サーバ, .pkpass 展開, 画像からの QR 読み取り)
+src/secrets.example.h Wi-Fi の認証情報の雛形 (secrets.h にコピーして使う。secrets.h は git に入らない)
+lib/quirc/            QR デコーダ quirc (vendored, ISC)
+tools/pass_send.py    PC からチケット (ファイル / 文字列) をバッジに送る
 src/main.cpp          入力 (ボタン, タッチ, IMU), 電源管理 (輝度, CPU クロック, deep sleep), 描画ループ
 src/diag/diag.cpp     診断ファーム (env:diag)。画面ずれ / IMU 軸 / 描画経路の確認
 tools/export_arduino_sketch.sh   Arduino IDE 用スケッチを生成
@@ -238,6 +244,46 @@ ESP32-S3 は Bluetooth LE のみ (Classic 非対応) なので、BLE HID キー�
 - 表示: 閉じた目、中央に大きな横型ミュートトグル (左 = MIC ON / 右 = MUTE)、状態 (MIC ON / MUTED)、PC 接続と電池
 - 使えるもの: トグルでミュート切替、BtnA (Alt+Tab)、BtnB (無変換)、ダブルクリック / 長押しの設定操作
 - 明るさは通常の `MEET_BRIGHTNESS_PERCENT` %。どう持っても正立するのは通常と同じ
+
+## チケット (QR) モード
+
+映画館やイベントの QR チケット (iPhone の Wallet など) をバッジに移して、画面の QR をスキャナに読ませるモードです。
+Apple Pay (クレジットカード / Suica) は NFC のセキュアエレメントで完結していて外に出せないので対象外です。
+
+### 操作
+
+| 操作 | 動作 |
+|---|---|
+| 通常モードで **左右にスワイプ** | チケットモードに入る (QR と作品名を表示、明るさ最大) |
+| チケットモードで **左右にスワイプ** | 通常モードに戻る (Wi-Fi も切れる) |
+| **上下にスワイプ** | 次 / 前のチケット (最大 `PASS_MAX` = 8 枚を NVS に保存) |
+| **タップ** | Wi-Fi を起こして受信待ちにする / 止める (最後の通信から 3 分で自動 OFF) |
+| QR を **1.5 秒長押し** | 表示中のチケットを削除 |
+
+### 準備 (Wi-Fi)
+
+1. `src/secrets.example.h` を `src/secrets.h` にコピーし、自宅の Wi-Fi と iPhone のテザリング (インターネット共有) の SSID / パスワードを書く。`secrets.h` は git に入らない
+2. ビルドして書き込む
+3. 受信待ちにすると一覧の Wi-Fi を順に試し、繋がると画面に `http://makkuro.local/pass` と IP が出る。どれにも繋がらないときはバッジ自身が AP (`Makkuro-Badge` / `makkuro1234`) になるので、iPhone をそれに繋いで同じ URL に送る
+
+外出先ではまず iPhone のテザリングを ON にしてから受信待ちにすると、バッジがテザリングに繋がって受け取れます。
+
+### iPhone から送る (ショートカット)
+
+ショートカット App で新規作成し、次の 2 アクションを置く。
+
+1. **「共有シートに表示」を ON** (詳細 → 共有シートに表示。受け取る種類は「ファイル」と「イメージ」)
+2. **URL の内容を取得**: URL `http://makkuro.local/pass`、方法 **POST**、本文 **ファイル** → 「ショートカットの入力」
+3. (任意) **結果を表示** で応答の JSON を確認
+
+使い方:
+
+- **Wallet のパス**: パスを開いて右上の共有 → ショートカットを選ぶ。`.pkpass` (中身は zip) が送られ、バッジが `pass.json` から QR の内容と作品名 / イベント名を取り出す
+- **共有できないパス**: パスの画面をスクリーンショット → 写真の共有 → ショートカット。バッジが画像から QR を読み取る (quirc)
+- **PC / ブラウザから**: 受信待ち中に `http://makkuro.local/` を開くと入力フォーム。`tools/pass_send.py` でもファイルや文字列を送れる
+
+バッジは受け取った QR の内容を保存し、自分で描き直します (白背景 + 余白、最大 300px)。元の画像はそのまま使いません。
+QR 以外のバーコード形式 (PDF417 / Aztec) のパスも内容は取れますが QR として描くので、読み取り側が QR 非対応だと使えません。
 
 ## 参考
 
