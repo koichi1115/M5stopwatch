@@ -101,7 +101,7 @@ static void buzz(uint8_t level, uint32_t ms, uint32_t now) {
   vibUntil = now + ms;
 }
 
-static bool leverVisible() { return HID_ENABLED && (kb.connected() || meetingMode); }
+static bool leverVisible() { return HID_ENABLED && meetingMode; }   // ミュートトグルは会議モードだけ
 
 // 会議モードの切替。入るとマイク (音センサ) を止め、顔のリアクションとバイブを止める
 static void setMeetingMode(bool on, uint32_t now) {
