@@ -43,9 +43,27 @@ M5GFX は OPI-PSRAM が有効なときだけ AMOLED 用フレームバッファ�
 ```bash
 pip install platformio            # 未導入なら
 pio run                           # ビルド
-pio run -t upload                 # USB-C で接続して書き込み
+python tools/flash.py             # 書き込み (esptool を直接呼ぶ。下記参照)
 pio device monitor                # シリアルログ (115200bps, USB CDC)
 ```
+
+> **書き込みは `pio run -t upload` ではなく `tools/flash.py` を使う。** PlatformIO の upload は SCons 経由で esptool を起動し、
+> この環境ではポート検出やリセット待ちで永久に止まることがあった (8 時間止まった実績あり)。`flash.py` は esptool を直接、
+> タイムアウト付きで実行し、止まったら残りプロセスを片付けてリセットし再試行する。日本語 Windows で esptool の進捗バーが
+> cp932 に出力できず落ちる問題 (途中まで書いて止まる) も、子プロセスを UTF-8 にして回避している。
+> `python tools/flash.py --build` でビルドも一緒に、`diag` で診断ファーム、`--full` で bootloader / partitions も書く。
+
+### 起動しない / 画面が出ないとき (基板の誤認識)
+
+M5GFX は起動時に I2C を探って基板を判定し、結果を NVS に保存する。タッチ (0x15) が応答しないと **PaperMono と誤認識**して
+それを保存し、以後ずっと画面が出なくなる (実際に起きた。原因は以前の deep sleep 実装が IO エキスパンダ経由でタッチのリセットを
+assert したまま眠り、IO エキスパンダは ESP のリセットで戻らないため)。`main.cpp` の起動処理で次を行い自動復旧する。
+
+1. `M5.begin()` の前に IO エキスパンダ (0x4F) の TP / OLED リセットを直接解除
+2. NVS のキャッシュ (`M5GFX/AUTODETECT`) が StopWatch 以外なら消す
+3. `M5.begin()` 後に基板が StopWatch でなければキャッシュを消して再起動 (最大 3 回)
+
+起動ログで `[Autodetect] board_M5StopWatch` と `[boot] M5Unified board=30` を確認する。
 
 - `platformio.ini` は pioarduino 版 platform-espressif32 (Arduino core 3.2.1 / ESP-IDF 5.4) を使用
 - ライブラリは GitHub のタグ (M5GFX 0.2.28 / M5Unified 0.2.21) から取得。レジストリが使えるなら `m5stack/M5Unified@^0.2.21` 形式でも可
@@ -54,8 +72,8 @@ pio device monitor                # シリアルログ (115200bps, USB CDC)
 ### 診断ファーム (画面ずれ / IMU 軸 / 描画経路の確認ツール)
 
 ```bash
-pio run -e diag -t upload           # src/diag/diag.cpp だけをビルドして書き込む
-pio run -e m5stopwatch -t upload    # 本番ファームに戻す
+python tools/flash.py diag --build          # src/diag/diag.cpp だけをビルドして書き込む
+python tools/flash.py m5stopwatch --build   # 本番ファームに戻す
 ```
 
 BtnB クリックでモードが切り替わります。シリアル (115200) に 0.5 秒毎 IMU 生値と補正量を出力します。
@@ -178,6 +196,7 @@ src/pass.h            QR チケット (NVS 保存, QR 描画, Wi-Fi 受信サー
 src/secrets.example.h Wi-Fi の認証情報の雛形 (secrets.h にコピーして使う。secrets.h は git に入らない)
 lib/quirc/            QR デコーダ quirc (vendored, ISC)
 tools/pass_send.py    PC からチケット (ファイル / 文字列) をバッジに送る
+tools/flash.py        書き込み (esptool 直接、タイムアウトと再試行付き)。pio run -t upload の代わりに使う
 src/main.cpp          入力 (ボタン, タッチ, IMU), 電源管理 (輝度, CPU クロック, deep sleep), 描画ループ
 src/diag/diag.cpp     診断ファーム (env:diag)。画面ずれ / IMU 軸 / 描画経路の確認
 tools/export_arduino_sketch.sh   Arduino IDE 用スケッチを生成

@@ -30,6 +30,72 @@
 #include "hid.h"
 #include "pass.h"
 
+#include <nvs.h>
+#include <esp_system.h>
+#include <Wire.h>
+
+// ループタスクのスタック (既定 8KB)。JSON / zip / QR デコードで深くなるので広げる
+SET_LOOP_TASK_STACK_SIZE(16 * 1024);
+
+// ------------------------------------------------------------
+// M5GFX は起動時に I2C を探って基板を判定し、結果を NVS ("M5GFX"/"AUTODETECT") に保存する。
+// タッチ (0x15) が一瞬応答しないと PaperMono と誤認識してそれを保存してしまい、以後ずっと画面が出なくなる
+// (実際に起きた)。起動前にキャッシュを検査し、起動後に基板が違えばキャッシュを消して再起動する。
+RTC_DATA_ATTR static uint8_t boardRetry = 0;
+
+static void clearBoardCache() {
+  nvs_handle_t h;
+  if (nvs_open("M5GFX", NVS_READWRITE, &h) == ESP_OK) {
+    nvs_erase_key(h, "AUTODETECT");
+    nvs_commit(h);
+    nvs_close(h);
+  }
+}
+
+// M5IOE1 (I2C 0x4F) の IO4 = TP RST, IO5 = OLED RST を HIGH にしてリセットを解除する。
+// この IO エキスパンダは ESP をリセットしても状態を保つので、一度 LOW にされると (以前の deep sleep 実装が
+// そうしていた) タッチが応答せず、M5GFX の自動検出が「タッチ無し = PaperMono」になり続ける。
+static void releaseTouchAndOledReset() {
+  Wire.begin(47, 48, 100000);
+  Wire.beginTransmission(0x4F); Wire.write(0x09); Wire.write(0x00); Wire.endTransmission();   // I2C idle sleep off
+  Wire.beginTransmission(0x4F); Wire.write(0x05);                                               // GPIO_OUT_L
+  if (Wire.endTransmission(false) == 0 && Wire.requestFrom(0x4F, 1) == 1) {
+    const uint8_t out = Wire.read();
+    if ((out & 0b00011000) != 0b00011000) {
+      Wire.beginTransmission(0x4F); Wire.write(0x05); Wire.write((uint8_t)(out | 0b00011000)); Wire.endTransmission();
+      printf("[boot] IOE1 GPIO_OUT was 0x%02X - released TP/OLED reset\n", out);
+      delay(80);   // タッチコントローラの起動待ち
+    }
+  } else {
+    puts("[boot] IOE1 not reachable before begin (ok if first boot)");
+  }
+  Wire.end();
+}
+
+static void checkBoardCacheBeforeBegin() {
+  releaseTouchAndOledReset();
+  nvs_handle_t h;
+  if (nvs_open("M5GFX", NVS_READONLY, &h) != ESP_OK) return;
+  uint32_t b = 0;
+  const bool have = nvs_get_u32(h, "AUTODETECT", &b) == ESP_OK;
+  nvs_close(h);
+  if (have && b != (uint32_t)m5::board_t::board_M5StopWatch) {
+    printf("[boot] board cache is %u (not StopWatch) - clearing\n", (unsigned)b);
+    clearBoardCache();
+  }
+}
+
+static void checkBoardAfterBegin() {
+  if (M5.getBoard() == m5::board_t::board_M5StopWatch) { boardRetry = 0; return; }
+  printf("[boot] wrong board detected (%d). clearing cache, retry %d\n", (int)M5.getBoard(), boardRetry);
+  clearBoardCache();
+  if (boardRetry < 3) {
+    boardRetry++;
+    delay(300);
+    esp_restart();
+  }
+}
+
 // ------------------------------------------------------------
 static M5Canvas screen(&M5.Display);
 static LovyanGFX* out = &screen;   // PSRAM が無いときは M5.Display に直接描く
@@ -167,11 +233,11 @@ static void enterDeepSleep() {
   M5.Display.waitDisplay();
   M5.Imu.sleep();
   if (M5.getBoard() == m5::board_t::board_M5StopWatch) {
-    // M5IOE1: IO5 = OLED RST, IO4 = TP RST (M5GFX の初期化手順より)。
-    // リセットを assert したまま眠り、起動時の M5GFX 自動検出で解除・再初期化される。
+    // M5IOE1: IO5 = OLED RST。リセットを assert したまま眠り、起動時の M5GFX 初期化で解除される。
+    // IO4 = TP RST は触らない: 復帰直後の M5GFX 自動検出はタッチ (I2C 0x15) の応答で基板を判定するので、
+    // リセット中だと PaperMono と誤認識して NVS に保存してしまう。
     auto& ioe = M5.getIOExpander(0);
     ioe.digitalWrite(m5::M5IOE1_Class::gpio5, false);
-    ioe.digitalWrite(m5::M5IOE1_Class::gpio4, false);
     delay(5);
   }
 
@@ -426,7 +492,9 @@ void setup() {
   cfg.internal_mic = SOUND_ENABLED;
   cfg.internal_spk = false;   // スピーカーはマイクと I2S ピンを共有するので使わない
   cfg.clear_display = true;
+  checkBoardCacheBeforeBegin();
   M5.begin(cfg);
+  checkBoardAfterBegin();   // 基板の誤認識なら再起動して戻ってこない
   bootMs = millis();
 
   printf("\n[boot] M5Unified board=%d imu=%d psram=%u\n", (int)M5.getBoard(), (int)M5.Imu.getType(), (unsigned)ESP.getPsramSize());

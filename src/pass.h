@@ -473,8 +473,16 @@ private:
       bool ok = false;
       if (method == 0) { memcpy(json, data, usize); ok = true; }
       else if (method == 8) {
-        const size_t n = tinfl_decompress_mem_to_mem(json, usize, data, csize, TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
-        ok = (n != TINFL_DECOMPRESS_MEM_TO_MEM_FAILED) && n == usize;
+        // tinfl_decompress_mem_to_mem は ~11KB の作業領域をスタックに置くので使わない (ループタスクが溢れる)
+        tinfl_decompressor* d = (tinfl_decompressor*)ps_malloc(sizeof(tinfl_decompressor));
+        if (d) {
+          tinfl_init(d);
+          size_t inLen = csize, outLen = usize;
+          const tinfl_status st = tinfl_decompress(d, data, &inLen, (mz_uint8*)json, (mz_uint8*)json, &outLen,
+                                                   TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF);
+          ok = (st == TINFL_STATUS_DONE) && outLen == usize;
+          free(d);
+        }
       }
       json[usize] = 0;
       if (!ok) { free(json); err = "inflate failed"; return false; }
@@ -541,14 +549,17 @@ private:
       const int n = quirc_count(q);
       printf("[pass] quirc: scale %.2f found %d code(s)\n", scale, n);
       bool ok = false;
-      for (int i = 0; i < n && !ok; ++i) {
-        struct quirc_code code;
-        struct quirc_data data;
-        quirc_extract(q, i, &code);
-        const quirc_decode_error_t e = quirc_decode(&code, &data);
-        if (e == QUIRC_SUCCESS) { text = String((const char*)data.payload, data.payload_len); ok = true; }
+      // quirc_code (~4KB) と quirc_data (~9KB) はスタックに置くとループタスクが溢れるのでヒープに
+      struct quirc_code* code = (struct quirc_code*)ps_malloc(sizeof(struct quirc_code));
+      struct quirc_data* data = (struct quirc_data*)ps_malloc(sizeof(struct quirc_data));
+      for (int i = 0; code && data && i < n && !ok; ++i) {
+        quirc_extract(q, i, code);
+        const quirc_decode_error_t e = quirc_decode(code, data);
+        if (e == QUIRC_SUCCESS) { text = String((const char*)data->payload, data->payload_len); ok = true; }
         else printf("[pass] quirc decode error: %s\n", quirc_strerror(e));
       }
+      free(code);
+      free(data);
       quirc_destroy(q);
       if (ok) return true;
     }
