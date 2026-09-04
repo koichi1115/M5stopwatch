@@ -502,7 +502,10 @@ void setup() {
   M5.BtnA.setHoldThresh(BUTTON_HOLD_MS);
   M5.BtnB.setHoldThresh(BUTTON_HOLD_MS);
   loadSettings();
-  if (PASS_ENABLED) { pass.begin(); printf("[boot] passes: %d\n", pass.count()); }
+  if (PASS_ENABLED) {
+    pass.begin();
+    printf("[boot] passes: %d\n", pass.count());
+  }
 
   const auto cause = esp_sleep_get_wakeup_cause();
   if (cause == ESP_SLEEP_WAKEUP_TIMER) {
@@ -718,6 +721,17 @@ void loop() {
   }
   // ---- チケット受信 (Wi-Fi) ----
   pass.update(now);
+  if (PASS_DEBUG_RECEIVE_ON_BOOT) {   // 開発用: 起動 3 秒後に受信待ちへ + ループの生存確認
+    static bool debugStarted = false;
+    if (!debugStarted && now > 3000) { debugStarted = true; passMode = true; pass.startReceive(now); puts("[debug] pass receive started"); }
+    static uint32_t lastBeat = 0;
+    if (now - lastBeat >= 5000) {
+      lastBeat = now;
+      printf("[loop] t=%lus mode=%s wifi=%d recv=%d heap=%u dt=%.3f\n", (unsigned long)(now / 1000),
+             passMode ? "pass" : (meetingMode ? "meeting" : "normal"), (int)WiFi.status(), (int)pass.receiving(),
+             (unsigned)ESP.getFreeHeap(), dt);
+    }
+  }
   if (pass.takeReceived()) {
     buzz(180, 60, now);
     printf("[pass] now %d passes, showing #%d\n", pass.count(), pass.current() + 1);

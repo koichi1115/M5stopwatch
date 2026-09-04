@@ -197,6 +197,7 @@ src/secrets.example.h Wi-Fi の認証情報の雛形 (secrets.h にコピーし�
 lib/quirc/            QR デコーダ quirc (vendored, ISC)
 tools/pass_send.py    PC からチケット (ファイル / 文字列) をバッジに送る
 tools/flash.py        書き込み (esptool 直接、タイムアウトと再試行付き)。pio run -t upload の代わりに使う
+tools/pass_test.py    チケット受信の自動テスト (リセット → 受信待ち → 送信 → ログ表示。PASS_DEBUG_RECEIVE_ON_BOOT と併用)
 src/main.cpp          入力 (ボタン, タッチ, IMU), 電源管理 (輝度, CPU クロック, deep sleep), 描画ループ
 src/diag/diag.cpp     診断ファーム (env:diag)。画面ずれ / IMU 軸 / 描画経路の確認
 tools/export_arduino_sketch.sh   Arduino IDE 用スケッチを生成
@@ -287,6 +288,12 @@ Apple Pay (クレジットカード / Suica) は NFC のセキュアエレメン
 
 外出先ではまず iPhone のテザリングを ON にしてから受信待ちにすると、バッジがテザリングに繋がって受け取れます。
 
+- ESP32 は **2.4GHz のみ**。Aterm など SSID 末尾が `-a` (5GHz) / `-g` (2.4GHz) に分かれている機種では `-g` の方を書く
+  (`-a` でも繋がることはあるが `NO_AP_FOUND` で失敗しやすい)。一覧は 2 周まで試し、それでもだめなら AP になる
+- 動作確認は `tools/pass_test.py` (`config.h` の `PASS_DEBUG_RECEIVE_ON_BOOT = true` で書き込んでおくと、起動 3 秒後に
+  自動で受信待ちになり、リセット → 送信 → バッジのログ表示までを PC だけで回せる)。実測: .pkpass、luma と MOVIX の
+  スクリーンショットの 3 種で読み取り成功
+
 ### iPhone から送る (ショートカット)
 
 ショートカット App で新規作成し、次の 2 アクションを置く。
@@ -294,6 +301,8 @@ Apple Pay (クレジットカード / Suica) は NFC のセキュアエレメン
 1. **「共有シートに表示」を ON** (詳細 → 共有シートに表示。受け取る種類は「ファイル」と「イメージ」)
 2. **URL の内容を取得**: URL `http://makkuro.local/pass`、方法 **POST**、本文 **ファイル** → 「ショートカットの入力」
 3. (任意) **結果を表示** で応答の JSON を確認
+4. (任意) 見出しを付けたいとき: 「入力を要求」で文字を聞き、URL を `http://makkuro.local/pass?title=` + その文字 (URL エンコード) にする。
+   無いときは .pkpass なら作品名 / イベント名、画像なら URL のホスト名か「QR チケット」が見出しになる
 
 使い方:
 

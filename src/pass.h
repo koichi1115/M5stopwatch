@@ -124,7 +124,9 @@ public:
     _lastError[0] = 0;
     WiFi.persistent(false);
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);          // BLE と共存中はスキャンが取りこぼしやすいので省電力を切る
     WiFi.setHostname(PASS_HOSTNAME);
+    _round = 0;
     tryNextNetwork(now);
   }
 
@@ -144,6 +146,10 @@ public:
     if (now - _lastActivity > PASS_WIFI_TIMEOUT_MS) { puts("[pass] receive timeout"); stopReceive(); return; }
     switch (_state) {
       case State::Connecting:
+        {
+          const int st = (int)WiFi.status();
+          if (st != _lastStatus) { _lastStatus = st; printf("[pass] wifi status %d (t=%lu)\n", st, (unsigned long)(now - _stateSince)); }
+        }
         if (WiFi.status() == WL_CONNECTED) {
           _ip = WiFi.localIP();
           startServer();
@@ -173,8 +179,8 @@ private:
         _prefs.putString(key('t', i).c_str(), _entries[i].title);
         _prefs.putString(key('x', i).c_str(), _entries[i].text);
       } else {
-        _prefs.remove(key('t', i).c_str());
-        _prefs.remove(key('x', i).c_str());
+        if (_prefs.isKey(key('t', i).c_str())) _prefs.remove(key('t', i).c_str());
+        if (_prefs.isKey(key('x', i).c_str())) _prefs.remove(key('x', i).c_str());
       }
     }
   }
@@ -212,9 +218,10 @@ private:
     return size;
   }
 
+  // タイトルが無いときの見出し: URL ならホスト名、それ以外 (券番号など) は汎用の見出し
   static String hostOf(const String& text) {
     int p = text.indexOf("://");
-    if (p < 0) return text.length() > 24 ? text.substring(0, 24) + "…" : text;
+    if (p < 0) return String("QR チケット");
     int s = p + 3, e = text.indexOf('/', s);
     return e < 0 ? text.substring(s) : text.substring(s, e);
   }
@@ -267,16 +274,21 @@ private:
   static const char* apSsid() { return "Makkuro-Badge"; }
   static const char* apPass() { return "makkuro1234"; }
 
+  // 一覧を順に試す。全部だめでも 2 周目まで粘る (BLE 共存中はスキャンを取りこぼすことがある)
   bool tryNextNetwork(uint32_t now) {
     const int n = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
-    while (_netIndex < n) {
-      const WifiCred& w = WIFI_NETWORKS[_netIndex++];
-      if (!w.ssid || !w.ssid[0] || strcmp(w.ssid, "your-home-ssid") == 0) continue;
-      printf("[pass] connecting to %s\n", w.ssid);
-      WiFi.disconnect();
-      WiFi.begin(w.ssid, w.pass);
-      _stateSince = now;
-      return true;
+    while (_round < 2) {
+      while (_netIndex < n) {
+        const WifiCred& w = WIFI_NETWORKS[_netIndex++];
+        if (!w.ssid || !w.ssid[0] || strcmp(w.ssid, "your-home-ssid") == 0) continue;
+        printf("[pass] connecting to %s (round %d)\n", w.ssid, _round + 1);
+        WiFi.disconnect();
+        WiFi.begin(w.ssid, w.pass);
+        _stateSince = now;
+        return true;
+      }
+      _round++;
+      _netIndex = 0;
     }
     return false;
   }
@@ -575,7 +587,7 @@ private:
   bool _receiving = false, _received = false, _apMode = false;
   State _state = State::Off;
   uint32_t _stateSince = 0, _lastActivity = 0;
-  int _netIndex = 0;
+  int _netIndex = 0, _lastStatus = -1, _round = 0;
   IPAddress _ip;
   char _lastError[64] = {0};
 };
