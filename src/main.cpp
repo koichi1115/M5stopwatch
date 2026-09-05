@@ -1,6 +1,6 @@
-// M5Stack StopWatch digital badge
-//  - Keeps a local geometric Bot mark upright using the IMU
-//  - Cycles marks with the existing BtnA+BtnB controls
+// M5Stack StopWatch デジタルバッジ
+//  - IMU で重力方向を検出し、どう回しても顔が正立する
+//  - まっくろくろすけ風の目がキョロキョロ / まばたき / 眠る / 驚く / 喜ぶ
 //  - 常時点灯 (AMOLED なので黒背景ならそれなりに省電力)、動きが無いと段階的に省電力へ
 //
 // 操作 (BtnA = GPIO2, BtnB = GPIO1。物理的にどちらがどれかは実機で確認):
@@ -133,6 +133,7 @@ static Preferences prefs;
 static SoundSensor sound;
 
 static uint8_t brightnessIndex = DEFAULT_BRIGHTNESS_INDEX;
+static uint8_t styleIndex = DEFAULT_STYLE_INDEX;   // 0 = まっくろくろすけ、1.. = Bot マーク
 static bool autoSleepEnabled = true;
 static uint32_t statusUntil = 0;
 static uint32_t lastFrameMs = 0;
@@ -140,7 +141,7 @@ static uint32_t lastLoopUs = 0;
 static uint32_t bootMs = 0;
 static bool lowClock = false;
 static int screenW = 468, screenH = 468;
-static uint8_t markIndex = DEFAULT_MARK_INDEX;
+static uint16_t furSeed = 12345;
 static uint32_t sleepEnteredMs = 0;
 static uint32_t mouthTouchStart = 0;   // 口元に触れ始めた時刻 (0 = 触れていない)
 static uint32_t vibUntil = 0;          // ノンブロッキングのバイブ停止時刻
@@ -177,10 +178,11 @@ static void loadSettings() {
   orient.setSign(prefs.getChar("sign", 1));
   orient.setOffset(prefs.getFloat("offset", 0.0f));
   brightnessIndex = prefs.getUChar("bri", DEFAULT_BRIGHTNESS_INDEX);
+  styleIndex = prefs.getUChar("style", DEFAULT_STYLE_INDEX);
+  if (styleIndex > MARK_COUNT) styleIndex = DEFAULT_STYLE_INDEX;
   if (brightnessIndex >= sizeof(BRIGHTNESS_LEVELS)) brightnessIndex = DEFAULT_BRIGHTNESS_INDEX;
   autoSleepEnabled = prefs.getBool("asleep", true);
   meetingMode = prefs.getBool("meet", false);
-  markIndex = normalizeMarkIndex(prefs.getUChar("mark", DEFAULT_MARK_INDEX));
 }
 
 static void saveOrientation() {
@@ -201,6 +203,15 @@ static void buzz(uint8_t level, uint32_t ms, uint32_t now) {
   M5.Power.setVibration(level);
   vibUntil = now + ms;
   sound.suppressLoudUntil(now + ms + SOUND_SUPPRESS_AFTER_VIBRATION_MS);   // 自分の振動音で驚かない
+}
+
+// 見た目の名前 ("makkuro" / "cyan circle" など)
+static const char* styleName(uint8_t idx) {
+  static char buf[32];
+  if (idx == STYLE_MAKKURO) return "makkuro";
+  const MarkDefinition& m = markAt((uint8_t)(idx - 1));
+  snprintf(buf, sizeof(buf), "%s %s", markColorName(m.color), markShapeName(m.shape));
+  return buf;
 }
 
 static bool leverVisible() { return HID_ENABLED && meetingMode; }   // ミュートトグルは会議モードだけ
@@ -303,6 +314,25 @@ static void motionCheckAfterTimerWake() {
   if (!moved) enterDeepSleep();
 }
 
+// ------------------------------------------------------------
+static void drawFur(float angleDeg) {
+  // 画面の縁に生える毛。顔と一緒に回す。
+  const float cx = screenW / 2.0f + DISPLAY_OFFSET_X, cy = screenH / 2.0f + DISPLAY_OFFSET_Y;
+  const float R = (screenW < screenH ? screenW : screenH) / 2.0f + 2.0f;
+  uint32_t seed = furSeed;
+  auto rnd = [&seed]() { seed = seed * 1103515245u + 12345u; return (seed >> 16) & 0x7FFF; };
+  const int hairs = FUR_COUNT;
+  for (int i = 0; i < hairs; ++i) {
+    const float a = (angleDeg + i * (360.0f / hairs) + (rnd() % 30) / 10.0f) * 0.01745329f;
+    const float len = FUR_MIN_LEN + (rnd() % (FUR_MAX_LEN - FUR_MIN_LEN + 1));
+    const float w = 1.4f + (rnd() % 10) / 6.0f;
+    const float x0 = cx + cosf(a) * R, y0 = cy + sinf(a) * R;
+    const float x1 = cx + cosf(a) * (R - len), y1 = cy + sinf(a) * (R - len);
+    out->drawWideLine(x0, y0, x1, y1, w, COLOR_FUR);
+    out->fillCircle((int)x1, (int)y1, (int)(w * 0.9f), COLOR_FUR_TIP);
+  }
+}
+
 // ミュートレバー (フェーダー風)。顔スプライトに描くので顔と一緒に回る。上 = MIC ON, 下 = MUTE
 static void drawLever() {
   M5Canvas& sp = face.sprite();
@@ -344,13 +374,19 @@ static void drawLever() {
   else            sp.drawString("MUTE", (int)(cx + g.halfLen + 38), (int)cy);
 }
 
-// 会議モードの画面: selected mark + 大きな横型ミュートトグル + 状態
+// 会議モードの画面: 閉じた目 (静か) + 大きな横型ミュートトグル + 状態
 static void drawMeeting(uint32_t now) {
   M5Canvas& sp = face.sprite();
   const int c = sp.width() / 2;
   sp.fillScreen(COLOR_TRANSPARENT);
 
-  drawBotMark(sp, c, c - 118, 36, markAt(markIndex));
+  // 見た目に合わせた小さな飾り。まっくろくろすけは閉じた目 (‿ ‿)、Bot は小さなマーク
+  if (styleIndex == STYLE_MAKKURO) {
+    const uint16_t eye = micMuted ? 0x8410 : COLOR_EYE_WHITE;   // ミュート中は少し寝ぼけた薄い色
+    for (int i = -1; i <= 1; i += 2) sp.fillArc(c + i * 62, c - 118, 26, 33, 20, 160, eye);
+  } else {
+    drawBotMark(sp, c, c - 118, 36, markAt((uint8_t)(styleIndex - 1)));
+  }
 
   sp.setFont(&fonts::Font2);
   sp.setTextSize(1);
@@ -398,6 +434,8 @@ static void drawStatus(uint32_t now) {
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "gx %+5.2f gy %+5.2f |a| %4.2f", orient.screenGx(), orient.screenGy(), orient.magnitudeG());
   sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "style %s", styleName(styleIndex));
+  sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "bri %d/%d  autosleep %s  idle %lus", brightnessIndex + 1, (int)sizeof(BRIGHTNESS_LEVELS),
            autoSleepEnabled ? "on" : "off", (unsigned long)(motion.idleMs(now) / 1000));
   sp.drawString(line, x, y); y += 16;
@@ -409,9 +447,6 @@ static void drawStatus(uint32_t now) {
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "ble %s  mic %s%s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
            micMuted ? "MUTED" : "on", meetingMode ? "  MEETING" : (passMode ? "  PASS" : ""));
-  sp.drawString(line, x, y);
-  y += 16;
-  snprintf(line, sizeof(line), "mark %s %s", markColorName(markAt(markIndex).color), markShapeName(markAt(markIndex).shape));
   sp.drawString(line, x, y);
 
   // 電池アーク (下部, 左から右へ伸びる)
@@ -439,13 +474,14 @@ static void render(uint32_t now) {
   } else if (meetingMode) {
     drawMeeting(now);
   } else {
-    face.draw(markAt(markIndex));
+    face.draw(styleIndex);
     if (leverVisible()) drawLever();
   }
   if ((int32_t)(now - statusUntil) < 0) drawStatus(now);
 
   if (out != &screen) M5.Display.startWrite();
   out->fillScreen(TFT_BLACK);
+  if (!meetingMode && !passMode && styleIndex == STYLE_MAKKURO) drawFur(angle);
   if (FACE_ANTIALIAS) face.sprite().pushRotatedWithAA(out, angle, COLOR_TRANSPARENT);
   else face.sprite().pushRotateZoom(out, screenW / 2.0f + DISPLAY_OFFSET_X, screenH / 2.0f + DISPLAY_OFFSET_Y, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
   if (out == &screen) screen.pushSprite(0, 0);
@@ -454,22 +490,22 @@ static void render(uint32_t now) {
 
 // ------------------------------------------------------------
 static void handleButtons(uint32_t now) {
-  static bool markChordActive = false;
+  // ---- BtnA + BtnB 同時押し: 見た目を切り替える (まっくろくろすけ ⇄ Bot マーク 5 種) ----
+  static bool styleChordActive = false;
   if (M5.BtnA.isPressed() && M5.BtnB.isPressed()) {
-    if (!markChordActive) {
-      markChordActive = true;
-      markIndex = nextMarkIndex(markIndex);
-      prefs.putUChar("mark", markIndex);
-      statusUntil = now + 1500;
-      vibrate(150, 60);
-      printf("[cfg] mark -> %s %s\n",
-             markColorName(markAt(markIndex).color),
-             markShapeName(markAt(markIndex).shape));
+    if (!styleChordActive) {
+      styleChordActive = true;
+      styleIndex = (uint8_t)((styleIndex + 1) % (MARK_COUNT + 1));
+      prefs.putUChar("style", styleIndex);
+      statusUntil = now + STATUS_OVERLAY_MS;
+      buzz(150, 60, now);
+      motion.touch(now);
+      printf("[cfg] style -> %s\n", styleName(styleIndex));
     }
-    return;
+    return;   // 同時押し中は単独の操作を無視する
   }
-  if (markChordActive) {
-    if (!M5.BtnA.isPressed() && !M5.BtnB.isPressed()) markChordActive = false;
+  if (styleChordActive) {
+    if (!M5.BtnA.isPressed() && !M5.BtnB.isPressed()) styleChordActive = false;
     return;
   }
 
@@ -559,6 +595,7 @@ void setup() {
   if (!face.begin()) {
     puts("[boot] face sprite alloc failed");
   }
+  furSeed = (uint16_t)esp_random();
   randomSeed(esp_random());
 
   M5.Display.fillScreen(TFT_BLACK);
@@ -566,10 +603,8 @@ void setup() {
   motion.touch(millis());
   if (VIBRATE_ON_BOOT && cause != ESP_SLEEP_WAKEUP_TIMER) vibrate(160, 70);
   lastLoopUs = micros();
-  printf("[boot] display %dx%d, sign=%+d offset=%.1f, mark=%s %s\n",
-         screenW, screenH, orient.sign(), orient.offset(),
-         markColorName(markAt(markIndex).color),
-         markShapeName(markAt(markIndex).shape));
+  printf("[boot] display %dx%d, sign=%+d offset=%.1f, style=%s\n", screenW, screenH, orient.sign(), orient.offset(),
+         styleName(styleIndex));
 }
 
 void loop() {

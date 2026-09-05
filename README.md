@@ -1,20 +1,22 @@
-# M5Stack StopWatch geometric Bot mark badge
+# M5Stack StopWatch デジタルバッジ (まっくろくろすけ / Bot mark)
 
 M5Stack **StopWatch** (ESP32-S3R8 / 1.75" 円形 AMOLED / BMI270 IMU) をカバンに付けて使う
 常時点灯デジタルバッジ用ファームウェアです。
 
-- **ローカル Bot mark**: 列挙された色と単純図形だけで構成された 5 種類から選択
-- **どう回しても正立**: IMU の重力方向から mark の回転角を求め、連続的に回して表示 (90° スナップにも切替可)
-- **選択を保存**: BtnA+BtnB を同時押しして mark を切替。選択は既存の NVS 設定に保存
-- **眠る**: 動きが無いと段階的に省電力へ移行し、最終的に画面 OFF / deep sleep
-- **反応**: 振動・タップ・急な音に対する既存の状態遷移で mark の大きさが短く変化
+- **見た目を切替**: **まっくろくろすけ** (大きな目と縁の毛) と **Bot mark 5 種** (色 + 単純図形)。
+  BtnA+BtnB の同時押しで順に切り替わり、NVS に保存される
+- **どちらの見た目でも目が動く**: キョロキョロ、まばたき (時々二度まばたき)、驚き、眠り、かじり、音楽の音符は共通。
+  Bot mark は図形の上に目が乗る
+- **どう回しても正立**: IMU の重力方向から回転角を求め、連続的に回して表示 (90° スナップにも切替可)
+- **眠る**: 動きが無いと 眠そう → 就寝 (Zzz) → 深い眠り (画面 OFF, deep sleep) と段階的に省電力
+- **反応**: 振ると驚く、画面をタップすると喜ぶ (照れ)、触り続けると指を目で追う
 - **PC のリモコン** (BLE キーボード): PC にペアリングすると、会議モードのトグルで Teams のマイクをミュート/解除 (Alt+A)、BtnA で Alt+Tab、BtnB で無変換キー (音声入力) を送る
 - **QR チケット**: iPhone の Wallet のパス (.pkpass) やスクリーンショットをショートカットから Wi-Fi で受け取り、QR を描き直して表示。左右スワイプでチケットモード
 - ボタンで明るさ / 向きの較正 / 回転方向の反転 / 自動就寝の ON-OFF。設定は NVS に保存
 
 > 2026-09-03 実機で動作確認済み (旧表示 / IMU による正立 / タッチ)。
 > IMU の軸対応と画面中心のオフセットは実測値を `config.h` に反映してあります。
-> Geometric Bot mark switching is build/test verified but still requires owner confirmation on hardware.
+> 見た目の切替 (まっくろくろすけ / Bot mark) はビルドとホストテストを通しています。実機での見え方は要確認です。
 > 未確認の項目は「[到着後のチェックリスト](#到着後のチェックリスト)」を参照。
 
 ---
@@ -86,8 +88,8 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 | モード | 内容 |
 |---|---|
 | ALIGN | 十字と円。画面をドラッグして縁にぴったり合わせる。表示される `off X Y` を `config.h` の `DISPLAY_OFFSET_X/Y` に入れる。BtnA クリック: 右へ 1px / BtnA 長押し: 下へ 1px / BtnB 長押し: リセット |
-| MARK AA | 本番と同じ経路 (透過スプライト → 回転 → キャンバス) で default mark を描き、IMU で回す。緑の枠 = mark スプライト境界、白の十字 = 画面中心 |
-| MARK NOAA | 同上、アンチエイリアス無し |
+| FACE AA | 本番と同じ経路 (透過スプライト → 回転 → キャンバス) で目と毛を描き、IMU で回す。緑の三角 = 顔の上、緑の枠 = 顔スプライト境界、白の十字 = 画面中心 |
+| FACE NOAA | 同上、アンチエイリアス無し |
 | SOUND | マイクの音量バー (青) / 背景フロア (黄線) / 驚きしきい値 (赤線) / 平坦度 / 継続率 / 音楽判定。急な大きい音で `LOUD!`。`config.h` の `SOUND_*` を調整するときに使う |
 
 ### Arduino IDE でビルドする場合
@@ -103,9 +105,11 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 
 ---
 
-## Bot marks
+## 見た目 (まっくろくろすけ / Bot mark)
 
-通常画面の中央には、`src/mark_config.h` のローカルテーブルから選んだ mark を表示します。
+通常画面の中央には、選んだ見た目を表示します。**まっくろくろすけ** (既定) は大きな白目と黒目に縁の毛が付き、
+**Bot mark** は `src/mark_config.h` のローカルテーブルから選んだ図形の上に目が乗ります。
+表情と目の動き (キョロキョロ / まばたき / 驚き / 眠り / かじり / 音楽) はどちらも共通の状態機械で、見た目だけが変わります。
 mark は `MarkColor` と `MarkShape` の列挙値だけで定義され、画像・キャラクター素材・ネットワーク設定は使いません。
 
 | index | color | shape |
@@ -116,8 +120,10 @@ mark は `MarkColor` と `MarkShape` の列挙値だけで定義され、画像�
 | 3 | magenta | diamond |
 | 4 | orange | hexagon |
 
-- **切替**: 通常の BtnA / BtnB 操作を変えず、**BtnA+BtnB の同時押し**で次の mark に進みます。
-- **保存**: 選択 index は既存の NVS `Preferences` (`badge` / `mark`) に保存され、再起動後も復元されます。不正な保存値は default に戻ります。
+- **切替**: 通常の BtnA / BtnB 操作を変えず、**BtnA+BtnB の同時押し**で まっくろくろすけ → 5 種の mark → まっくろくろすけ と一巡します。
+- **保存**: 選択は NVS `Preferences` (`badge` / `style`) に保存され、再起動後も復元されます。不正な保存値は既定 (まっくろくろすけ) に戻ります。
+- **調整**: Bot mark の目の大きさや位置は `config.h` の `BOT_EYE_*` / `MARK_RADIUS`、まっくろくろすけ側は `EYE_*` / `FUR_*`。
+  縁の毛はまっくろくろすけのときだけ描きます。
 - **追加**: `MarkColor` / `MarkShape` と描画対応を必要に応じて追加し、`MARK_DEFINITIONS` に `{color, shape}` を 1 行追加します。ロジックは表示ライブラリに依存しません。
 
 Host tests and secret scan:
@@ -217,7 +223,7 @@ src/config.h          調整パラメータ
 src/orientation.h     姿勢トラッカ (重力→回転角, 較正, 反転, スナップ) と動き検出
 src/mark_config.h     host-testable な mark 色・形の列挙とローカル定義テーブル
 src/mark_renderer.h   M5GFX の単純図形による Bot mark 描画
-src/face.h            既存の反応・省電力状態機械と mark スプライト
+src/face.h            気分の状態機械と 2 つの見た目の描画 (まっくろくろすけ / Bot mark + 目)
 src/sound.h           音センサ (音量・背景フロア・スペクトル平坦度 → 急な大きい音 / 音楽の判定)
 src/hid.h             BLE HID キーボード (NimBLE)。PC にショートカットを送る
 src/pass.h            QR チケット (NVS 保存, QR 描画, Wi-Fi 受信サーバ, .pkpass 展開, 画像からの QR 読み取り)
@@ -225,6 +231,7 @@ src/secrets.example.h Wi-Fi の認証情報の雛形 (secrets.h にコピーし�
 lib/quirc/            QR デコーダ quirc (vendored, ISC)
 tools/pass_send.py    PC からチケット (ファイル / 文字列) をバッジに送る
 tools/flash.py        書き込み (esptool 直接、タイムアウトと再試行付き)。pio run -t upload の代わりに使う
+tools/preview_face.py 顔レイアウトの PNG プレビュー (要 Pillow)
 tools/pass_test.py    チケット受信の自動テスト (リセット → 受信待ち → 送信 → ログ表示。PASS_DEBUG_RECEIVE_ON_BOOT と併用)
 src/main.cpp          入力 (ボタン, タッチ, IMU), 電源管理 (輝度, CPU クロック, deep sleep), 描画ループ
 src/diag/diag.cpp     診断ファーム (env:diag)。画面ずれ / IMU 軸 / 描画経路の確認
