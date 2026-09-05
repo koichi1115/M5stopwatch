@@ -167,7 +167,7 @@ public:
   }
 
 private:
-  enum class State { Off, Connecting, Listening, Unavailable };
+  enum class State { Off, Connecting, Listening };
 
   // ---------- NVS ----------
   static String key(char k, int i) { char b[4] = {k, (char)('0' + i), 0, 0}; return String(b); }
@@ -233,13 +233,7 @@ private:
     sp.setFont(&fonts::lgfxJapanGothic_16);
     sp.setTextColor(COLOR_UI);
     char buf[64];
-    if (_state == State::Unavailable) {
-      sp.setTextColor(COLOR_LEVER_MUTE);
-      sp.drawString("Wi-Fi に接続できません", (int)c, (int)(c - 60));
-      sp.setTextColor(COLOR_UI);
-      sp.drawString("安全のため SoftAP は無効です", (int)c, (int)(c - 24));
-      sp.drawString("secrets.h の接続先を確認してください", (int)c, (int)(c + 12));
-    } else if (_state == State::Connecting) {
+    if (_state == State::Connecting) {
       const int n = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
       if (_netIndex > 0 && _netIndex <= n) snprintf(buf, sizeof(buf), "Wi-Fi 接続中: %s", WIFI_NETWORKS[_netIndex - 1].ssid);
       else snprintf(buf, sizeof(buf), "Wi-Fi 接続中...");
@@ -289,13 +283,9 @@ private:
   }
 
   void failNoNetwork() {
-    puts("[pass] no known wifi; SoftAP fallback is disabled");
-    _server.stop();
-    MDNS.end();
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
+    puts("[pass] no configured wifi; receive stopped");
     snprintf(_lastError, sizeof(_lastError), "no configured Wi-Fi available");
-    _state = State::Unavailable;
+    stopReceive();
   }
 
   void startServer() {
