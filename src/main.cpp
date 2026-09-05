@@ -592,6 +592,17 @@ void loop() {
 
   if (M5.BtnA.isPressed() || M5.BtnB.isPressed()) sound.suppressLoudUntil(now + SOUND_SUPPRESS_AFTER_TOUCH_MS);   // ボタンのカチッで驚かない
 
+  // ---- 起動時にタッチチップの応答を 1 回だけ記録 (タッチが効かないときの切り分け用) ----
+  {
+    static bool touchChecked = false;
+    if (!touchChecked && now - bootMs > 1500) {
+      touchChecked = true;
+      uint8_t id = 0;
+      const bool ok = M5.In_I2C.readRegister(0x15, 0xA7, &id, 1, 400000);
+      printf("[boot] touch enabled=%d chip i2c=%d id=0x%02X\n", (int)M5.Touch.isEnabled(), (int)ok, id);
+    }
+  }
+
   // ---- BLE 接続状態 ----
   if (kb.takeConnectionChange()) {
     statusUntil = now + STATUS_OVERLAY_MS;
@@ -648,6 +659,9 @@ void loop() {
     const bool onLever = leverVisible() &&
                          (g.vertical ? (fabsf(lx - g.x) < g.zoneHalfW && fabsf(ly - g.y) < g.halfLen + g.knobR)
                                      : (fabsf(ly - g.y) < g.zoneHalfW && fabsf(lx - g.x) < g.halfLen + g.knobR));
+    if (t.wasPressed()) printf("[touch] down x=%d y=%d local=(%.0f,%.0f)\n", t.x, t.y, lx, ly);
+    if (t.wasReleased()) printf("[touch] up   dist=(%d,%d) flicked=%d clicked=%d dragged=%d\n", t.distanceX(), t.distanceY(),
+                                (int)t.wasFlicked(), (int)t.wasClicked(), (int)t.wasDragged());
 
     // ---- 縦スワイプでモード切替 (下 = 会議モードへ, 上 = 通常へ)。通常モードのレバー上では無効 ----
     if (t.wasFlicked() && !(g.vertical && (onLever || leverDragging))) {
