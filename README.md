@@ -7,8 +7,7 @@ M5Stack **StopWatch** (ESP32-S3R8 / 1.75" 円形 AMOLED / BMI270 IMU) をカバ�
 - **どう回しても正立**: IMU の重力方向から mark の回転角を求め、連続的に回して表示 (90° スナップにも切替可)
 - **選択を保存**: BtnA+BtnB を同時押しして mark を切替。選択は既存の NVS 設定に保存
 - **眠る**: 動きが無いと段階的に省電力へ移行し、最終的に画面 OFF / deep sleep
-- **音に反応** (マイク): 急に大きい音がすると驚いてキョロキョロ見回す (寝ていても起きる)。音楽が聞こえると目を閉じて音符を流す
-- **かじる**: 口元に指を 2 秒以上置くと口が出てきて、大きく開けてパクッと閉じる (閉じる瞬間にバイブ)
+- **反応**: 振動・タップ・急な音に対する既存の状態遷移で mark の大きさが短く変化
 - **PC のリモコン** (BLE キーボード): PC にペアリングすると、会議モードのトグルで Teams のマイクをミュート/解除 (Alt+A)、BtnA で Alt+Tab、BtnB で無変換キー (音声入力) を送る
 - **QR チケット**: iPhone の Wallet のパス (.pkpass) やスクリーンショットをショートカットから Wi-Fi で受け取り、QR を描き直して表示。左右スワイプでチケットモード
 - ボタンで明るさ / 向きの較正 / 回転方向の反転 / 自動就寝の ON-OFF。設定は NVS に保存
@@ -42,7 +41,7 @@ M5GFX は OPI-PSRAM が有効なときだけ AMOLED 用フレームバッファ�
 ## ビルドと書き込み (PlatformIO)
 
 ```bash
-pip install platformio            # 未導入なら
+python3 -m pip install platformio "click<8.2" # 未導入なら (pioarduino 同梱 esptool の互換条件)
 pio run                           # ビルド
 python tools/flash.py             # 書き込み (esptool を直接呼ぶ。下記参照)
 pio device monitor                # シリアルログ (115200bps, USB CDC)
@@ -138,20 +137,19 @@ The secret scan is also a PlatformIO pre-build step and runs in `.github/workflo
 |---|---|
 | BtnA + BtnB 同時押し | 次の geometric Bot mark に切替 (NVS に保存) |
 | BtnA クリック | **PC に Alt+Tab を送る** (直前のウィンドウと切り替え)。未接続なら長めのバイブ |
-| BtnA ダブルクリック | **回転方向を反転** (傾けたとき顔が逆に回るならこれ)。ステータスも 5 秒表示 |
+| BtnA ダブルクリック | **回転方向を反転** (傾けたとき mark が逆に回るならこれ)。ステータスも 5 秒表示 |
 | BtnA 長押し (1.2s) | 明るさ 4 段階を切替 |
 | BtnB クリック | **PC に 無変換キーを送る** (音声入力用)。未接続なら長めのバイブ |
-| 顔を **下へスワイプ** | **会議モード**に入る (バイブ・音への反応・かじり・居眠りを止め、大きな横型ミュートトグルと状態だけを表示) |
+| 通常画面を **下へスワイプ** | **会議モード**に入る (バイブ・音への反応・居眠りを止め、大きな横型ミュートトグルと状態だけを表示) |
 | 会議モードのトグル | **マイクのミュート切替**。左 = MIC ON / 右 = MUTE。ドラッグかタップで切替、Alt+A (Teams) を送る |
 | 会議モードで **上へスワイプ** | 通常モードに戻る |
 | BtnB ダブルクリック | 自動就寝の ON / OFF (OFF なら常に起きている) |
 | BtnB 長押し (1.2s) | **今の向きを「正立」として記憶** (画面を立てて、上にしたい方を上にして押す) |
-| 画面タップ | 喜ぶ (^ ^ と照れ) |
-| 画面を触り続ける | 指を目で追う |
-| 口元 (目の下) に指を 2 秒以上 | 口が出てきてかじろうとする。離すと消える |
-| 振る | 驚く |
-| 急な大きい音 (手を叩く等) | 驚いてキョロキョロ見回す。寝ていても起きる |
-| 音楽 (数秒続く音) | 目を閉じて音符を流す。止まると戻る |
+| 画面タップ | mark が短く拡大 |
+| 画面を触り続ける | 起きた状態を維持 |
+| 振る | mark が短く拡大 |
+| 急な大きい音 (手を叩く等) | mark が短く拡大。寝ていても起きる |
+| 音楽 (数秒続く音) | 起きた状態を維持 |
 
 設定 (回転方向 / 較正角 / 明るさ / 自動就寝) は NVS に保存され、電源を切っても残ります。
 
@@ -164,11 +162,11 @@ The secret scan is also a PlatformIO pre-build step and runs in `.github/workflo
 1. ~~**起動ログ**~~ 確認済み: `board_M5StopWatch`, `imu=6 (bmi270)`, PSRAM 8MB。
    (Arduino の `Serial` 出力は USB CDC に届かなかったため、ログは `printf` に変更済み)
 2. ~~**画面が真っ暗**~~ 確認済み (文字も崩れない)。
-3. ~~**顔が逆さま / 90° ズレ**~~ 実測で `ACC_TO_SCREEN_X/Y` を修正済み (USB 下で正立)。別の向きにしたければ **BtnB 長押し**。
+3. ~~**mark が逆さま / 90° ズレ**~~ 実測で `ACC_TO_SCREEN_X/Y` を修正済み (USB 下で正立)。別の向きにしたければ **BtnB 長押し**。
 4. **傾けると逆に回る**: **BtnA ダブルクリック**で反転。(較正の前後どちらでも可)
 5. **ボタンの物理配置**: どれが BtnA(GPIO2)/BtnB(GPIO1) か確認。逆が良ければ `main.cpp` の `handleButtons()` で入れ替え。
 6. **fps**: ステータス表示中に動きがカクつくなら `config.h` の `FACE_ANTIALIAS = false`、それでも重ければ `FACE_SIZE` を小さく。
-7. **タッチ座標**: 触った場所を目が追うか。ズレるなら `main.cpp` のタッチ→顔座標変換の `R` を調整。
+7. **タッチ座標**: タップとスワイプが画面の向きに関係なく認識されるか確認。
 8. **深い眠り**: 90 秒静止で寝る → 30 分後に画面 OFF → ボタンで復帰 することを確認。
    画面 OFF は「輝度 0 + IO エキスパンダで OLED/タッチのリセットを assert」で実現しているので、
    復帰後に画面やタッチが死んでいたら `main.cpp` の `enterDeepSleep()` のリセット部分を外す。
@@ -183,7 +181,7 @@ The secret scan is also a PlatformIO pre-build step and runs in `.github/workflo
 「カバンに付けて一日中」は、そのままでは厳しい可能性が高いです。このファームでは次で延命しています。
 
 - 背景が黒 (AMOLED は黒画素が消灯するので消費が小さい)
-- 動きが無いと 眠り顔 (fps↓, 輝度↓, CPU 80MHz) → 30 分で deep sleep (µA オーダー)
+- 動きが無いと fps・輝度・CPU クロックを段階的に下げる → 30 分で deep sleep (µA オーダー)
 - deep sleep 中は 5 分毎に 1.5 秒だけ起きて IMU を見る。動いていれば復帰、静止なら寝直す
 
 歩いているとき (人に見せたいとき) は起きていて、置きっぱなしなら寝る、という設計です。
@@ -206,8 +204,6 @@ The secret scan is also a PlatformIO pre-build step and runs in `.github/workflo
 | 動き / 振り の感度 | `MOTION_*`, `SHAKE_*` |
 | 明るさ | `BRIGHTNESS_LEVELS`, `SLEEP_BRIGHTNESS` |
 | 音に反応する感度 | `SOUND_LOUD_*` (驚き), `SOUND_MUSIC_*` (音楽判定)。`SOUND_ENABLED = false` でマイクごと無効 |
-| 口 | `MOUTH_TOUCH_HOLD_MS`, `MOUTH_ZONE_*` (判定範囲), `MOUTH_OFFSET_Y`, `MOUTH_MAX_OPEN` |
-| 音符 | `NOTE_*`, `COLOR_NOTE` |
 | PC に送るキー / レバーの位置 | `HID_MUTE_*`, `HID_BTN_A_*`, `HID_BTN_B_*`, `LEVER_*`。`HID_ENABLED = false` で BLE 無効 |
 | QR チケット | `PASS_MAX` (枚数), `PASS_HOSTNAME` (makkuro.local), `PASS_WIFI_TIMEOUT_MS`, `PASS_QR_MAX_PX`。Wi-Fi は `src/secrets.h`。`PASS_ENABLED = false` で無効 |
 
@@ -273,7 +269,7 @@ ESP32-S3 は Bluetooth LE のみ (Classic 非対応) なので、BLE HID キー�
 
 1. バッジの電源を入れる (起動ログに `[boot] ble hid "Makkuro Badge" advertising` が出る)
 2. Windows の 設定 → Bluetooth とデバイス → **デバイスの追加** → Bluetooth → **Makkuro Badge** を選ぶ
-3. 接続されるとバッジが震えてステータスに `ble connected` と出る。ミュートトグルは会議モード (顔を下へスワイプ) で表示される
+3. 接続されるとバッジが震えてステータスに `ble connected` と出る。ミュートトグルは会議モード (通常画面を下へスワイプ) で表示される
 
 一度ペアリングすれば次回からは自動で再接続します。切断されると再びアドバタイズします。
 
@@ -290,10 +286,10 @@ ESP32-S3 は Bluetooth LE のみ (Classic 非対応) なので、BLE HID キー�
 
 ### 会議モード
 
-顔を **下へスワイプ**すると会議モード、**上へスワイプ**で通常に戻ります (再起動しても維持)。会議中に顔の演出が邪魔にならないためのモードです。
+通常画面を **下へスワイプ**すると会議モード、**上へスワイプ**で通常に戻ります (再起動しても維持)。
 
-- 止まるもの: バイブ (`MEET_SILENT`)、マイクの音センサ (驚き / 音楽)、かじり、キョロキョロ、居眠りと deep sleep
-- 表示: 閉じた目、中央に大きな横型ミュートトグル (左 = MIC ON / 右 = MUTE)、状態 (MIC ON / MUTED)、PC 接続と電池
+- 止まるもの: バイブ (`MEET_SILENT`)、マイクの音センサ、居眠りと deep sleep
+- 表示: 選択中の小さい mark、中央に大きな横型ミュートトグル (左 = MIC ON / 右 = MUTE)、状態 (MIC ON / MUTED)、PC 接続と電池
 - 使えるもの: トグルでミュート切替、BtnA (Alt+Tab)、BtnB (無変換)、ダブルクリック / 長押しの設定操作
 - 明るさは通常の `MEET_BRIGHTNESS_PERCENT` %。どう持っても正立するのは通常と同じ
 
