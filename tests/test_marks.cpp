@@ -1,5 +1,5 @@
-#include <cstdlib>
-#include <iostream>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "mark_config.h"
 
@@ -7,10 +7,10 @@ namespace {
 
 void require(bool condition, const char* name) {
   if (!condition) {
-    std::cerr << "[FAIL] " << name << '\n';
-    std::exit(1);
+    fprintf(stderr, "[FAIL] %s\n", name);
+    exit(1);
   }
-  std::cout << "[PASS] " << name << '\n';
+  printf("[PASS] %s\n", name);
 }
 
 void testDefaultSelection() {
@@ -54,6 +54,6 @@ int main() {
   testDefinitionsUseEnums();
   testSelectionCycles();
   testInvalidSelectionFailsClosed();
-  std::cout << "All mark tests passed.\n";
+  puts("All mark tests passed.");
   return 0;
 }
