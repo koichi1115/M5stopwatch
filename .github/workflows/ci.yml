@@ -21,7 +21,8 @@ jobs:
         run: python3 tools/run_host_tests.py
 
       - name: Install PlatformIO
-        run: python3 -m pip install platformio
+        # The pioarduino platform's bundled esptool is not compatible with Click 8.2+.
+        run: python3 -m pip install platformio "click<8.2"
 
       - name: Build M5Stack StopWatch firmware
         run: pio run -e m5stopwatch
