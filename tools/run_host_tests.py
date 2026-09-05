@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> None:
-    compiler = os.environ.get("CXX", "c++")
+    compiler = os.environ.get("CXX", "g++")
     with tempfile.TemporaryDirectory(prefix="m5stopwatch-tests-") as temp_dir:
         binary = Path(temp_dir) / "test_marks"
         subprocess.run(
