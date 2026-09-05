@@ -55,9 +55,36 @@ static void clearBoardCache() {
 // M5IOE1 (I2C 0x4F) の IO4 = TP RST, IO5 = OLED RST を HIGH にしてリセットを解除する。
 // この IO エキスパンダは ESP をリセットしても状態を保つので、一度 LOW にされると (以前の deep sleep 実装が
 // そうしていた) タッチが応答せず、M5GFX の自動検出が「タッチ無し = PaperMono」になり続ける。
+// 診断用: IOE1 のレジスタ 0x00..0x27 をダンプ (Wire を開いた状態で呼ぶ)
+static void dumpIoe1(const char* tag) {
+  printf("[ioe1] %s:", tag);
+  for (uint8_t reg = 0; reg < 0x28; ++reg) {
+    Wire.beginTransmission(0x4F); Wire.write(reg);
+    if (Wire.endTransmission(false) == 0 && Wire.requestFrom(0x4F, 1) == 1) printf(" %02X", Wire.read());
+    else printf(" --");
+  }
+  printf("\n");
+}
+
 static void releaseTouchAndOledReset() {
   Wire.begin(47, 48, 100000);
-  Wire.beginTransmission(0x4F); Wire.write(0x09); Wire.write(0x00); Wire.endTransmission();   // I2C idle sleep off
+  dumpIoe1("before");
+  Wire.beginTransmission(0x4F); Wire.write(0x23); Wire.write(0x00); Wire.endTransmission();   // I2C_CFG: idle sleep off (M5GFX と同じ)
+  // GPIO_PU_L (0x09): 以前の版が誤って 0 にしていた。オープンドレイン (DRV=1) のピンにはプルアップが要るので DRV と同じビットを立てる
+  {
+    Wire.beginTransmission(0x4F); Wire.write(0x13);
+    if (Wire.endTransmission(false) == 0 && Wire.requestFrom(0x4F, 1) == 1) {
+      const uint8_t drv = Wire.read();
+      Wire.beginTransmission(0x4F); Wire.write(0x09);
+      if (Wire.endTransmission(false) == 0 && Wire.requestFrom(0x4F, 1) == 1) {
+        const uint8_t pu = Wire.read();
+        if ((pu & drv) != drv) {
+          Wire.beginTransmission(0x4F); Wire.write(0x09); Wire.write((uint8_t)(pu | drv)); Wire.endTransmission();
+          printf("[boot] IOE1 PU_L %02X -> %02X (open-drain pins %02X)\n", pu, pu | drv, drv);
+        }
+      }
+    }
+  }
   Wire.beginTransmission(0x4F); Wire.write(0x05);                                               // GPIO_OUT_L
   if (Wire.endTransmission(false) == 0 && Wire.requestFrom(0x4F, 1) == 1) {
     const uint8_t out = Wire.read();
@@ -496,6 +523,9 @@ void setup() {
   M5.begin(cfg);
   checkBoardAfterBegin();   // 基板の誤認識なら再起動して戻ってこない
   bootMs = millis();
+  printf("[boot] ioe1 gpio4(display power)=%d gpio5=%d brightness=%d\n",
+         (int)M5.getIOExpander(0).getWriteValue(m5::M5IOE1_Class::gpio4),
+         (int)M5.getIOExpander(0).getWriteValue(m5::M5IOE1_Class::gpio5), (int)M5.Display.getBrightness());
 
   printf("\n[boot] M5Unified board=%d imu=%d psram=%u\n", (int)M5.getBoard(), (int)M5.Imu.getType(), (unsigned)ESP.getPsramSize());
 
