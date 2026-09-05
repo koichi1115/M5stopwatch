@@ -312,12 +312,12 @@ Apple Pay (クレジットカード / Suica) は NFC のセキュアエレメン
 
 1. `src/secrets.example.h` を `src/secrets.h` にコピーし、自宅の Wi-Fi と iPhone のテザリング (インターネット共有) の SSID / パスワードを書く。`secrets.h` は git に入らない
 2. ビルドして書き込む
-3. 受信待ちにすると一覧の Wi-Fi を順に試し、繋がると画面に `http://makkuro.local/pass` と IP が出る。どれにも繋がらないときはバッジ自身が AP (`Makkuro-Badge` / `makkuro1234`) になるので、iPhone をそれに繋いで同じ URL に送る
+3. 受信待ちにすると一覧の Wi-Fi を順に試し、繋がると画面に `http://makkuro.local/pass` と IP が出る。どれにも繋がらないときは安全のため受信を停止し、SoftAP は起動しない
 
 外出先ではまず iPhone のテザリングを ON にしてから受信待ちにすると、バッジがテザリングに繋がって受け取れます。
 
 - ESP32 は **2.4GHz のみ**。Aterm など SSID 末尾が `-a` (5GHz) / `-g` (2.4GHz) に分かれている機種では `-g` の方を書く
-  (`-a` でも繋がることはあるが `NO_AP_FOUND` で失敗しやすい)。一覧は 2 周まで試し、それでもだめなら AP になる
+  (`-a` でも繋がることはあるが `NO_AP_FOUND` で失敗しやすい)。一覧は 2 周まで試し、それでもだめなら SoftAP を起動せず受信を停止する
 - 動作確認は `tools/pass_test.py` (`config.h` の `PASS_DEBUG_RECEIVE_ON_BOOT = true` で書き込んでおくと、起動 3 秒後に
   自動で受信待ちになり、リセット → 送信 → バッジのログ表示までを PC だけで回せる)。実測: .pkpass、luma と MOVIX の
   スクリーンショットの 3 種で読み取り成功
