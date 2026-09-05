@@ -95,7 +95,7 @@ public:
     const int size = drawQr(sp, e.text.c_str(), (int)c, (int)(c + 22), PASS_QR_MAX_PX);
     // タイトル (上)
     sp.setFont(&fonts::lgfxJapanGothic_20);
-    sp.setTextColor(COLOR_EYE_WHITE);
+    sp.setTextColor(COLOR_UI_BRIGHT);
     String t = e.title.length() ? e.title : hostOf(e.text);
     if (sp.textWidth(t.c_str()) > 330) { sp.setFont(&fonts::lgfxJapanGothic_16); }
     while (t.length() > 4 && sp.textWidth(t.c_str()) > 340) t = t.substring(0, t.length() - 1);
@@ -251,7 +251,7 @@ private:
         snprintf(buf, sizeof(buf), "Wi-Fi: %s", WiFi.SSID().c_str());
         sp.drawString(buf, (int)c, (int)(c - 60));
       }
-      sp.setTextColor(COLOR_EYE_WHITE);
+      sp.setTextColor(COLOR_UI_BRIGHT);
       snprintf(buf, sizeof(buf), "http://%s.local/pass", PASS_HOSTNAME);
       sp.drawString(buf, (int)c, (int)(c + 14));
       snprintf(buf, sizeof(buf), "http://%s/", _ip.toString().c_str());

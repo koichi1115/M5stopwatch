@@ -1,20 +1,21 @@
-# M5Stack StopWatch デジタルバッジ 「まっくろくろすけ風の目」
+# M5Stack StopWatch geometric Bot mark badge
 
 M5Stack **StopWatch** (ESP32-S3R8 / 1.75" 円形 AMOLED / BMI270 IMU) をカバンに付けて使う
 常時点灯デジタルバッジ用ファームウェアです。
 
-- **どう回しても正立**: IMU の重力方向から顔の回転角を求め、連続的に回して表示 (90° スナップにも切替可)
-- **キョロキョロ**: 大きな白目と黒目がランダムに視線を動かし、まばたき (時々二度まばたき)
-- **眠る**: 動きが無いと 眠そう → 就寝 (Zzz) → 深い眠り (画面 OFF, deep sleep) と段階的に省電力
-- **反応**: 振ると驚く、画面をタップすると喜ぶ (照れ)、触り続けると指を目で追う
+- **ローカル Bot mark**: 列挙された色と単純図形だけで構成された 5 種類から選択
+- **どう回しても正立**: IMU の重力方向から mark の回転角を求め、連続的に回して表示 (90° スナップにも切替可)
+- **選択を保存**: BtnA+BtnB を同時押しして mark を切替。選択は既存の NVS 設定に保存
+- **眠る**: 動きが無いと段階的に省電力へ移行し、最終的に画面 OFF / deep sleep
 - **音に反応** (マイク): 急に大きい音がすると驚いてキョロキョロ見回す (寝ていても起きる)。音楽が聞こえると目を閉じて音符を流す
 - **かじる**: 口元に指を 2 秒以上置くと口が出てきて、大きく開けてパクッと閉じる (閉じる瞬間にバイブ)
 - **PC のリモコン** (BLE キーボード): PC にペアリングすると、会議モードのトグルで Teams のマイクをミュート/解除 (Alt+A)、BtnA で Alt+Tab、BtnB で無変換キー (音声入力) を送る
 - **QR チケット**: iPhone の Wallet のパス (.pkpass) やスクリーンショットをショートカットから Wi-Fi で受け取り、QR を描き直して表示。左右スワイプでチケットモード
 - ボタンで明るさ / 向きの較正 / 回転方向の反転 / 自動就寝の ON-OFF。設定は NVS に保存
 
-> 2026-09-03 実機で動作確認済み (顔の表示 / IMU による正立 / タッチ)。
+> 2026-09-03 実機で動作確認済み (旧表示 / IMU による正立 / タッチ)。
 > IMU の軸対応と画面中心のオフセットは実測値を `config.h` に反映してあります。
+> Geometric Bot mark switching is build/test verified but still requires owner confirmation on hardware.
 > 未確認の項目は「[到着後のチェックリスト](#到着後のチェックリスト)」を参照。
 
 ---
@@ -86,8 +87,8 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 | モード | 内容 |
 |---|---|
 | ALIGN | 十字と円。画面をドラッグして縁にぴったり合わせる。表示される `off X Y` を `config.h` の `DISPLAY_OFFSET_X/Y` に入れる。BtnA クリック: 右へ 1px / BtnA 長押し: 下へ 1px / BtnB 長押し: リセット |
-| FACE AA | 本番と同じ経路 (透過スプライト → 回転 → キャンバス) で目と毛を描き、IMU で回す。緑の三角 = 顔の上、緑の枠 = 顔スプライト境界、白の十字 = 画面中心 |
-| FACE NOAA | 同上、アンチエイリアス無し |
+| MARK AA | 本番と同じ経路 (透過スプライト → 回転 → キャンバス) で default mark を描き、IMU で回す。緑の枠 = mark スプライト境界、白の十字 = 画面中心 |
+| MARK NOAA | 同上、アンチエイリアス無し |
 | SOUND | マイクの音量バー (青) / 背景フロア (黄線) / 驚きしきい値 (赤線) / 平坦度 / 継続率 / 音楽判定。急な大きい音で `LOUD!`。`config.h` の `SOUND_*` を調整するときに使う |
 
 ### Arduino IDE でビルドする場合
@@ -103,10 +104,39 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 
 ---
 
+## Bot marks
+
+通常画面の中央には、`src/mark_config.h` のローカルテーブルから選んだ mark を表示します。
+mark は `MarkColor` と `MarkShape` の列挙値だけで定義され、画像・キャラクター素材・ネットワーク設定は使いません。
+
+| index | color | shape |
+|---:|---|---|
+| 0 (default) | cyan | circle |
+| 1 | green | square |
+| 2 | yellow | triangle |
+| 3 | magenta | diamond |
+| 4 | orange | hexagon |
+
+- **切替**: 通常の BtnA / BtnB 操作を変えず、**BtnA+BtnB の同時押し**で次の mark に進みます。
+- **保存**: 選択 index は既存の NVS `Preferences` (`badge` / `mark`) に保存され、再起動後も復元されます。不正な保存値は default に戻ります。
+- **追加**: `MarkColor` / `MarkShape` と描画対応を必要に応じて追加し、`MARK_DEFINITIONS` に `{color, shape}` を 1 行追加します。ロジックは表示ライブラリに依存しません。
+
+Host tests and secret scan:
+
+```bash
+python3 tools/run_host_tests.py
+python3 tools/secret_scan.py
+```
+
+The secret scan is also a PlatformIO pre-build step and runs in `.github/workflows/ci.yml`.
+
+---
+
 ## 操作
 
 | 操作 | 動作 |
 |---|---|
+| BtnA + BtnB 同時押し | 次の geometric Bot mark に切替 (NVS に保存) |
 | BtnA クリック | **PC に Alt+Tab を送る** (直前のウィンドウと切り替え)。未接続なら長めのバイブ |
 | BtnA ダブルクリック | **回転方向を反転** (傾けたとき顔が逆に回るならこれ)。ステータスも 5 秒表示 |
 | BtnA 長押し (1.2s) | 明るさ 4 段階を切替 |
@@ -171,10 +201,7 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 | IMU 軸と画面軸の対応 | `ACC_TO_SCREEN_X / Y` (ただし通常は較正+反転で足りる) |
 | 回転の追従の速さ / ぬるぬる感 | `ORIENT_FILTER_TAU_SEC`, `ORIENT_DEADBAND_DEG` |
 | 90° 単位にしたい | `ORIENT_SNAP_90 = true` |
-| 目の大きさ・間隔 | `EYE_RADIUS`, `PUPIL_RADIUS`, `EYE_OFFSET_X` |
-| 毛の量 | `FUR_COUNT`, `FUR_MIN_LEN`, `FUR_MAX_LEN` |
-| キョロキョロの頻度 | `GAZE_HOLD_MIN/MAX_MS`, `GAZE_SPEED` |
-| まばたき | `BLINK_INTERVAL_*`, `BLINK_DURATION_MS`, `DOUBLE_BLINK_PROBABILITY` |
+| mark の大きさ | `MARK_RADIUS` |
 | 眠くなるまでの時間 | `DROWSY_AFTER_MS`, `SLEEP_AFTER_MS`, `DEEP_SLEEP_AFTER_MS` |
 | 動き / 振り の感度 | `MOTION_*`, `SHAKE_*` |
 | 明るさ | `BRIGHTNESS_LEVELS`, `SLEEP_BRIGHTNESS` |
@@ -184,8 +211,6 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 | PC に送るキー / レバーの位置 | `HID_MUTE_*`, `HID_BTN_A_*`, `HID_BTN_B_*`, `LEVER_*`。`HID_ENABLED = false` で BLE 無効 |
 | QR チケット | `PASS_MAX` (枚数), `PASS_HOSTNAME` (makkuro.local), `PASS_WIFI_TIMEOUT_MS`, `PASS_QR_MAX_PX`。Wi-Fi は `src/secrets.h`。`PASS_ENABLED = false` で無効 |
 
-`tools/preview_face.py` (要 Pillow) で顔レイアウトの静止画プレビューを出せます (幾何を Python で再現したもので、実機描画そのものではありません)。
-
 ---
 
 ## 構成
@@ -194,7 +219,9 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 platformio.ini        ビルド設定 (ESP32-S3, 16MB Flash, OPI PSRAM, USB CDC)
 src/config.h          調整パラメータ
 src/orientation.h     姿勢トラッカ (重力→回転角, 較正, 反転, スナップ) と動き検出
-src/face.h            顔の描画と気分の状態機械 (起床 / 眠い / 就寝 / 驚き / 喜び / びっくり / 音楽 / かじる)
+src/mark_config.h     host-testable な mark 色・形の列挙とローカル定義テーブル
+src/mark_renderer.h   M5GFX の単純図形による Bot mark 描画
+src/face.h            既存の反応・省電力状態機械と mark スプライト
 src/sound.h           音センサ (音量・背景フロア・スペクトル平坦度 → 急な大きい音 / 音楽の判定)
 src/hid.h             BLE HID キーボード (NimBLE)。PC にショートカットを送る
 src/pass.h            QR チケット (NVS 保存, QR 描画, Wi-Fi 受信サーバ, .pkpass 展開, 画像からの QR 読み取り)
@@ -206,11 +233,11 @@ tools/pass_test.py    チケット受信の自動テスト (リセット → 受
 src/main.cpp          入力 (ボタン, タッチ, IMU), 電源管理 (輝度, CPU クロック, deep sleep), 描画ループ
 src/diag/diag.cpp     診断ファーム (env:diag)。画面ずれ / IMU 軸 / 描画経路の確認
 tools/export_arduino_sketch.sh   Arduino IDE 用スケッチを生成
-tools/preview_face.py            顔レイアウトの PNG プレビュー
+tools/run_host_tests.py          mark table / cycling の host test runner
+tools/secret_scan.py             tracked source の secret scan (PlatformIO pre-build)
 ```
 
-描画は「顔スプライト (380x380, PSRAM) に正立で描く → 回転して全画面キャンバス (468x468, PSRAM) に貼る → パネルへ転送」。
-毛は全画面キャンバス側に顔と同じ角度で描いています。
+描画は「mark スプライト (380x380, PSRAM) に正立で描く → 回転して全画面キャンバス (468x468, PSRAM) に貼る → パネルへ転送」。
 
 ## 音の判定について
 

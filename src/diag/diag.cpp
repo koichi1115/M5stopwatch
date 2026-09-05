@@ -1,12 +1,12 @@
-// 診断ファーム (env:diag): 画面ずれ / IMU 軸 / 顔の描画経路 / 音 を実機で確認するツール
+// 診断ファーム (env:diag): 画面ずれ / IMU 軸 / mark描画経路 / 音 を実機で確認するツール
 //   pio run -e diag -t upload
 //
 // モード (BtnB クリックで切替):
 //   0 ALIGN : 十字と円。画面をドラッグして縁にぴったり合わせる → 「off X Y」が DISPLAY_OFFSET_X/Y
 //             BtnA クリック: 右へ 1px / BtnA 長押し: 下へ 1px / BtnB 長押し: リセット
-//   1 FACE AA : 本番と同じ経路 (透過スプライト → pushRotatedWithAA → キャンバス) で目を描く。
-//             IMU の角度で回る。緑の枠 = 顔スプライトの境界、白の十字 = 画面中心
-//   2 FACE NOAA : 同上だが pushRotateZoom (AA 無し)
+//   1 MARK AA : 本番と同じ経路 (透過スプライト → pushRotatedWithAA → キャンバス) でmarkを描く。
+//             IMU の角度で回る。緑の枠 = markスプライトの境界、白の十字 = 画面中心
+//   2 MARK NOAA : 同上だが pushRotateZoom (AA 無し)
 //   3 SOUND : マイクの音量バー (青) / 背景フロア (黄線) / 驚きしきい値 (赤線) / 平坦度 / 継続率 / 音楽判定。
 //             急な大きい音で「LOUD!」が出る。config.h の SOUND_* を調整するときに使う
 // シリアル (115200) に 0.5 秒毎 IMU 生値・補正量・音の値を出力
@@ -14,17 +14,18 @@
 #include <stdio.h>
 #include <math.h>
 #include "../config.h"
+#include "../mark_renderer.h"
 #include "../orientation.h"
 #include "../sound.h"
 
 static M5Canvas canvas(&M5.Display);
-static M5Canvas faceSp(&canvas);
+static M5Canvas markSp(&canvas);
 static OrientationTracker orient;
 static SoundSensor sound;
 static int W, H;
 static int offX = DISPLAY_OFFSET_X, offY = DISPLAY_OFFSET_Y;
 static int mode = 0;
-static const char* MODE_NAMES[] = {"ALIGN", "FACE AA", "FACE NOAA", "SOUND"};
+static const char* MODE_NAMES[] = {"ALIGN", "MARK AA", "MARK NOAA", "SOUND"};
 static constexpr int MODE_COUNT = 4;
 static uint32_t loudFlashUntil = 0;
 
@@ -51,31 +52,17 @@ static void drawAlign() {
   canvas.pushSprite(0, 0);
 }
 
-static void drawFace(bool aa) {
+static void drawMark(bool aa) {
   const float cx = W / 2.0f + offX, cy = H / 2.0f + offY;
   const float angle = orient.displayAngle();
   canvas.fillScreen(TFT_BLACK);
-  // 本番と同じ毛
-  const float R = (W < H ? W : H) / 2.0f + 2.0f;
-  for (int i = 0; i < FUR_COUNT; ++i) {
-    const float a = (angle + i * (360.0f / FUR_COUNT)) * 0.01745329f;
-    const float len = FUR_MIN_LEN + (i * 7) % (FUR_MAX_LEN - FUR_MIN_LEN + 1);
-    canvas.drawWideLine(cx + cosf(a) * R, cy + sinf(a) * R, cx + cosf(a) * (R - len), cy + sinf(a) * (R - len), 2.0f, COLOR_FUR);
-  }
-  // 顔スプライト: 透過背景 + 目 + 境界 (緑)
-  const float c = faceSp.width() / 2.0f;
-  faceSp.fillScreen(COLOR_TRANSPARENT);
-  faceSp.drawRect(0, 0, faceSp.width(), faceSp.height(), TFT_GREEN);
-  for (int i = -1; i <= 1; i += 2) {
-    faceSp.fillEllipse((int)(c + i * EYE_OFFSET_X), (int)(c + EYE_OFFSET_Y), EYE_RADIUS, EYE_RADIUS, COLOR_EYE_WHITE);
-    faceSp.fillEllipse((int)(c + i * EYE_OFFSET_X), (int)(c + EYE_OFFSET_Y), PUPIL_RADIUS, PUPIL_RADIUS, COLOR_PUPIL);
-  }
-  faceSp.fillTriangle((int)c, (int)(c - 150), (int)(c - 14), (int)(c - 120), (int)(c + 14), (int)(c - 120), TFT_GREEN); // 顔の「上」
-  // 口元の判定範囲 (本番の MOUTH_ZONE_*) を薄く
-  faceSp.drawRect((int)(c - MOUTH_ZONE_HALF_W), (int)(c + MOUTH_ZONE_TOP), MOUTH_ZONE_HALF_W * 2, MOUTH_ZONE_BOTTOM - MOUTH_ZONE_TOP, TFT_DARKGREY);
+  const float c = markSp.width() / 2.0f;
+  markSp.fillScreen(COLOR_TRANSPARENT);
+  markSp.drawRect(0, 0, markSp.width(), markSp.height(), TFT_GREEN);
+  drawBotMark(markSp, (int)c, (int)c, MARK_RADIUS, markAt(DEFAULT_MARK_INDEX));
   canvas.setPivot(cx, cy);
-  if (aa) faceSp.pushRotatedWithAA(&canvas, angle, COLOR_TRANSPARENT);
-  else    faceSp.pushRotateZoom(&canvas, cx, cy, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
+  if (aa) markSp.pushRotatedWithAA(&canvas, angle, COLOR_TRANSPARENT);
+  else    markSp.pushRotateZoom(&canvas, cx, cy, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
   // 画面中心の十字 (白)
   canvas.drawLine(cx - 30, cy, cx + 30, cy, TFT_WHITE);
   canvas.drawLine(cx, cy - 30, cx, cy + 30, TFT_WHITE);
@@ -83,7 +70,7 @@ static void drawFace(bool aa) {
   canvas.setFont(&fonts::Font2);
   canvas.setTextColor(TFT_WHITE, TFT_BLACK);
   char buf[48];
-  snprintf(buf, sizeof(buf), "%s  ang %.0f", aa ? "FACE AA" : "FACE NOAA", angle);
+  snprintf(buf, sizeof(buf), "%s  ang %.0f", aa ? "MARK AA" : "MARK NOAA", angle);
   canvas.drawString(buf, cx, cy + 200);
   canvas.pushSprite(0, 0);
 }
@@ -143,13 +130,13 @@ void setup() {
   canvas.setPsram(true);
   canvas.setColorDepth(16);
   const bool ok = canvas.createSprite(W, H);
-  faceSp.setPsram(true);
-  faceSp.setColorDepth(16);
-  const bool ok2 = faceSp.createSprite(FACE_SIZE, FACE_SIZE);
-  faceSp.setPivot(faceSp.width() / 2.0f, faceSp.height() / 2.0f);
+  markSp.setPsram(true);
+  markSp.setColorDepth(16);
+  const bool ok2 = markSp.createSprite(FACE_SIZE, FACE_SIZE);
+  markSp.setPivot(markSp.width() / 2.0f, markSp.height() / 2.0f);
   const bool ok3 = sound.begin();
   delay(1500);
-  printf("\n[diag] board=%d imu=%d psram=%u display=%dx%d touch=%d canvas=%d face=%d mic=%d\n",
+  printf("\n[diag] board=%d imu=%d psram=%u display=%dx%d touch=%d canvas=%d mark=%d mic=%d\n",
          (int)M5.getBoard(), (int)M5.Imu.getType(), (unsigned)ESP.getPsramSize(), W, H,
          (int)M5.Touch.isEnabled(), (int)ok, (int)ok2, (int)ok3);
 }
@@ -192,7 +179,7 @@ void loop() {
   // ---- 描画 ----
   if (mode == 0) { if (dirty) { dirty = false; drawAlign(); } }
   else if (mode == 3) { if (now - lastSoundDraw >= 50) { lastSoundDraw = now; drawSound(now); } dirty = false; }
-  else { drawFace(mode == 1); dirty = false; }
+  else { drawMark(mode == 1); dirty = false; }
 
   if (now - lastLog > 500) {
     lastLog = now;
