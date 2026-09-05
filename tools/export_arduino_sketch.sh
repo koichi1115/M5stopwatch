@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 out="arduino_sketch/M5StopWatchBadge"
 rm -rf "$out"
 mkdir -p "$out"
-cp src/config.h src/orientation.h src/face.h src/sound.h src/hid.h "$out/"
+cp src/config.h src/mark_config.h src/mark_renderer.h src/orientation.h src/face.h src/sound.h src/hid.h src/pass.h "$out/"
 # Arduino IDE では ライブラリマネージャで NimBLE-Arduino (2.x) も入れること
 # main.cpp を .ino に。Arduino IDE では <Arduino.h> は暗黙 include なので残しても問題ない。
 cp src/main.cpp "$out/M5StopWatchBadge.ino"

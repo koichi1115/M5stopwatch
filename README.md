@@ -1,20 +1,20 @@
-# M5Stack StopWatch デジタルバッジ 「まっくろくろすけ風の目」
+# M5Stack StopWatch geometric Bot mark badge
 
 M5Stack **StopWatch** (ESP32-S3R8 / 1.75" 円形 AMOLED / BMI270 IMU) をカバンに付けて使う
 常時点灯デジタルバッジ用ファームウェアです。
 
-- **どう回しても正立**: IMU の重力方向から顔の回転角を求め、連続的に回して表示 (90° スナップにも切替可)
-- **キョロキョロ**: 大きな白目と黒目がランダムに視線を動かし、まばたき (時々二度まばたき)
-- **眠る**: 動きが無いと 眠そう → 就寝 (Zzz) → 深い眠り (画面 OFF, deep sleep) と段階的に省電力
-- **反応**: 振ると驚く、画面をタップすると喜ぶ (照れ)、触り続けると指を目で追う
-- **音に反応** (マイク): 急に大きい音がすると驚いてキョロキョロ見回す (寝ていても起きる)。音楽が聞こえると目を閉じて音符を流す
-- **かじる**: 口元に指を 2 秒以上置くと口が出てきて、大きく開けてパクッと閉じる (閉じる瞬間にバイブ)
+- **ローカル Bot mark**: 列挙された色と単純図形だけで構成された 5 種類から選択
+- **どう回しても正立**: IMU の重力方向から mark の回転角を求め、連続的に回して表示 (90° スナップにも切替可)
+- **選択を保存**: BtnA+BtnB を同時押しして mark を切替。選択は既存の NVS 設定に保存
+- **眠る**: 動きが無いと段階的に省電力へ移行し、最終的に画面 OFF / deep sleep
+- **反応**: 振動・タップ・急な音に対する既存の状態遷移で mark の大きさが短く変化
 - **PC のリモコン** (BLE キーボード): PC にペアリングすると、会議モードのトグルで Teams のマイクをミュート/解除 (Alt+A)、BtnA で Alt+Tab、BtnB で無変換キー (音声入力) を送る
 - **QR チケット**: iPhone の Wallet のパス (.pkpass) やスクリーンショットをショートカットから Wi-Fi で受け取り、QR を描き直して表示。左右スワイプでチケットモード
 - ボタンで明るさ / 向きの較正 / 回転方向の反転 / 自動就寝の ON-OFF。設定は NVS に保存
 
-> 2026-09-03 実機で動作確認済み (顔の表示 / IMU による正立 / タッチ)。
+> 2026-09-03 実機で動作確認済み (旧表示 / IMU による正立 / タッチ)。
 > IMU の軸対応と画面中心のオフセットは実測値を `config.h` に反映してあります。
+> Geometric Bot mark switching is build/test verified but still requires owner confirmation on hardware.
 > 未確認の項目は「[到着後のチェックリスト](#到着後のチェックリスト)」を参照。
 
 ---
@@ -41,7 +41,7 @@ M5GFX は OPI-PSRAM が有効なときだけ AMOLED 用フレームバッファ�
 ## ビルドと書き込み (PlatformIO)
 
 ```bash
-pip install platformio            # 未導入なら
+python3 -m pip install platformio "click<8.2" # 未導入なら (pioarduino 同梱 esptool の互換条件)
 pio run                           # ビルド
 python tools/flash.py             # 書き込み (esptool を直接呼ぶ。下記参照)
 pio device monitor                # シリアルログ (115200bps, USB CDC)
@@ -86,8 +86,8 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 | モード | 内容 |
 |---|---|
 | ALIGN | 十字と円。画面をドラッグして縁にぴったり合わせる。表示される `off X Y` を `config.h` の `DISPLAY_OFFSET_X/Y` に入れる。BtnA クリック: 右へ 1px / BtnA 長押し: 下へ 1px / BtnB 長押し: リセット |
-| FACE AA | 本番と同じ経路 (透過スプライト → 回転 → キャンバス) で目と毛を描き、IMU で回す。緑の三角 = 顔の上、緑の枠 = 顔スプライト境界、白の十字 = 画面中心 |
-| FACE NOAA | 同上、アンチエイリアス無し |
+| MARK AA | 本番と同じ経路 (透過スプライト → 回転 → キャンバス) で default mark を描き、IMU で回す。緑の枠 = mark スプライト境界、白の十字 = 画面中心 |
+| MARK NOAA | 同上、アンチエイリアス無し |
 | SOUND | マイクの音量バー (青) / 背景フロア (黄線) / 驚きしきい値 (赤線) / 平坦度 / 継続率 / 音楽判定。急な大きい音で `LOUD!`。`config.h` の `SOUND_*` を調整するときに使う |
 
 ### Arduino IDE でビルドする場合
@@ -103,25 +103,53 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 
 ---
 
+## Bot marks
+
+通常画面の中央には、`src/mark_config.h` のローカルテーブルから選んだ mark を表示します。
+mark は `MarkColor` と `MarkShape` の列挙値だけで定義され、画像・キャラクター素材・ネットワーク設定は使いません。
+
+| index | color | shape |
+|---:|---|---|
+| 0 (default) | cyan | circle |
+| 1 | green | square |
+| 2 | yellow | triangle |
+| 3 | magenta | diamond |
+| 4 | orange | hexagon |
+
+- **切替**: 通常の BtnA / BtnB 操作を変えず、**BtnA+BtnB の同時押し**で次の mark に進みます。
+- **保存**: 選択 index は既存の NVS `Preferences` (`badge` / `mark`) に保存され、再起動後も復元されます。不正な保存値は default に戻ります。
+- **追加**: `MarkColor` / `MarkShape` と描画対応を必要に応じて追加し、`MARK_DEFINITIONS` に `{color, shape}` を 1 行追加します。ロジックは表示ライブラリに依存しません。
+
+Host tests and secret scan:
+
+```bash
+python3 tools/run_host_tests.py
+python3 tools/secret_scan.py
+```
+
+The secret scan is also a PlatformIO pre-build step and runs in `.github/workflows/ci.yml`.
+
+---
+
 ## 操作
 
 | 操作 | 動作 |
 |---|---|
+| BtnA + BtnB 同時押し | 次の geometric Bot mark に切替 (NVS に保存) |
 | BtnA クリック | **PC に Alt+Tab を送る** (直前のウィンドウと切り替え)。未接続なら長めのバイブ |
-| BtnA ダブルクリック | **回転方向を反転** (傾けたとき顔が逆に回るならこれ)。ステータスも 5 秒表示 |
+| BtnA ダブルクリック | **回転方向を反転** (傾けたとき mark が逆に回るならこれ)。ステータスも 5 秒表示 |
 | BtnA 長押し (1.2s) | 明るさ 4 段階を切替 |
 | BtnB クリック | **PC に 無変換キーを送る** (音声入力用)。未接続なら長めのバイブ |
-| 顔を **下へスワイプ** | **会議モード**に入る (バイブ・音への反応・かじり・居眠りを止め、大きな横型ミュートトグルと状態だけを表示) |
+| 通常画面を **下へスワイプ** | **会議モード**に入る (バイブ・音への反応・居眠りを止め、大きな横型ミュートトグルと状態だけを表示) |
 | 会議モードのトグル | **マイクのミュート切替**。左 = MIC ON / 右 = MUTE。ドラッグかタップで切替、Alt+A (Teams) を送る |
 | 会議モードで **上へスワイプ** | 通常モードに戻る |
 | BtnB ダブルクリック | 自動就寝の ON / OFF (OFF なら常に起きている) |
 | BtnB 長押し (1.2s) | **今の向きを「正立」として記憶** (画面を立てて、上にしたい方を上にして押す) |
-| 画面タップ | 喜ぶ (^ ^ と照れ) |
-| 画面を触り続ける | 指を目で追う |
-| 口元 (目の下) に指を 2 秒以上 | 口が出てきてかじろうとする。離すと消える |
-| 振る | 驚く |
-| 急な大きい音 (手を叩く等) | 驚いてキョロキョロ見回す。寝ていても起きる |
-| 音楽 (数秒続く音) | 目を閉じて音符を流す。止まると戻る |
+| 画面タップ | mark が短く拡大 |
+| 画面を触り続ける | 起きた状態を維持 |
+| 振る | mark が短く拡大 |
+| 急な大きい音 (手を叩く等) | mark が短く拡大。寝ていても起きる |
+| 音楽 (数秒続く音) | 起きた状態を維持 |
 
 設定 (回転方向 / 較正角 / 明るさ / 自動就寝) は NVS に保存され、電源を切っても残ります。
 
@@ -134,11 +162,11 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 1. ~~**起動ログ**~~ 確認済み: `board_M5StopWatch`, `imu=6 (bmi270)`, PSRAM 8MB。
    (Arduino の `Serial` 出力は USB CDC に届かなかったため、ログは `printf` に変更済み)
 2. ~~**画面が真っ暗**~~ 確認済み (文字も崩れない)。
-3. ~~**顔が逆さま / 90° ズレ**~~ 実測で `ACC_TO_SCREEN_X/Y` を修正済み (USB 下で正立)。別の向きにしたければ **BtnB 長押し**。
+3. ~~**mark が逆さま / 90° ズレ**~~ 実測で `ACC_TO_SCREEN_X/Y` を修正済み (USB 下で正立)。別の向きにしたければ **BtnB 長押し**。
 4. **傾けると逆に回る**: **BtnA ダブルクリック**で反転。(較正の前後どちらでも可)
 5. **ボタンの物理配置**: どれが BtnA(GPIO2)/BtnB(GPIO1) か確認。逆が良ければ `main.cpp` の `handleButtons()` で入れ替え。
 6. **fps**: ステータス表示中に動きがカクつくなら `config.h` の `FACE_ANTIALIAS = false`、それでも重ければ `FACE_SIZE` を小さく。
-7. **タッチ座標**: 触った場所を目が追うか。ズレるなら `main.cpp` のタッチ→顔座標変換の `R` を調整。
+7. **タッチ座標**: タップとスワイプが画面の向きに関係なく認識されるか確認。
 8. **深い眠り**: 90 秒静止で寝る → 30 分後に画面 OFF → ボタンで復帰 することを確認。
    画面 OFF は「輝度 0 + IO エキスパンダで OLED/タッチのリセットを assert」で実現しているので、
    復帰後に画面やタッチが死んでいたら `main.cpp` の `enterDeepSleep()` のリセット部分を外す。
@@ -153,7 +181,7 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 「カバンに付けて一日中」は、そのままでは厳しい可能性が高いです。このファームでは次で延命しています。
 
 - 背景が黒 (AMOLED は黒画素が消灯するので消費が小さい)
-- 動きが無いと 眠り顔 (fps↓, 輝度↓, CPU 80MHz) → 30 分で deep sleep (µA オーダー)
+- 動きが無いと fps・輝度・CPU クロックを段階的に下げる → 30 分で deep sleep (µA オーダー)
 - deep sleep 中は 5 分毎に 1.5 秒だけ起きて IMU を見る。動いていれば復帰、静止なら寝直す
 
 歩いているとき (人に見せたいとき) は起きていて、置きっぱなしなら寝る、という設計です。
@@ -171,20 +199,13 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 | IMU 軸と画面軸の対応 | `ACC_TO_SCREEN_X / Y` (ただし通常は較正+反転で足りる) |
 | 回転の追従の速さ / ぬるぬる感 | `ORIENT_FILTER_TAU_SEC`, `ORIENT_DEADBAND_DEG` |
 | 90° 単位にしたい | `ORIENT_SNAP_90 = true` |
-| 目の大きさ・間隔 | `EYE_RADIUS`, `PUPIL_RADIUS`, `EYE_OFFSET_X` |
-| 毛の量 | `FUR_COUNT`, `FUR_MIN_LEN`, `FUR_MAX_LEN` |
-| キョロキョロの頻度 | `GAZE_HOLD_MIN/MAX_MS`, `GAZE_SPEED` |
-| まばたき | `BLINK_INTERVAL_*`, `BLINK_DURATION_MS`, `DOUBLE_BLINK_PROBABILITY` |
+| mark の大きさ | `MARK_RADIUS` |
 | 眠くなるまでの時間 | `DROWSY_AFTER_MS`, `SLEEP_AFTER_MS`, `DEEP_SLEEP_AFTER_MS` |
 | 動き / 振り の感度 | `MOTION_*`, `SHAKE_*` |
 | 明るさ | `BRIGHTNESS_LEVELS`, `SLEEP_BRIGHTNESS` |
 | 音に反応する感度 | `SOUND_LOUD_*` (驚き), `SOUND_MUSIC_*` (音楽判定)。`SOUND_ENABLED = false` でマイクごと無効 |
-| 口 | `MOUTH_TOUCH_HOLD_MS`, `MOUTH_ZONE_*` (判定範囲), `MOUTH_OFFSET_Y`, `MOUTH_MAX_OPEN` |
-| 音符 | `NOTE_*`, `COLOR_NOTE` |
 | PC に送るキー / レバーの位置 | `HID_MUTE_*`, `HID_BTN_A_*`, `HID_BTN_B_*`, `LEVER_*`。`HID_ENABLED = false` で BLE 無効 |
 | QR チケット | `PASS_MAX` (枚数), `PASS_HOSTNAME` (makkuro.local), `PASS_WIFI_TIMEOUT_MS`, `PASS_QR_MAX_PX`。Wi-Fi は `src/secrets.h`。`PASS_ENABLED = false` で無効 |
-
-`tools/preview_face.py` (要 Pillow) で顔レイアウトの静止画プレビューを出せます (幾何を Python で再現したもので、実機描画そのものではありません)。
 
 ---
 
@@ -194,7 +215,9 @@ BtnB クリックでモードが切り替わります。シリアル (115200) �
 platformio.ini        ビルド設定 (ESP32-S3, 16MB Flash, OPI PSRAM, USB CDC)
 src/config.h          調整パラメータ
 src/orientation.h     姿勢トラッカ (重力→回転角, 較正, 反転, スナップ) と動き検出
-src/face.h            顔の描画と気分の状態機械 (起床 / 眠い / 就寝 / 驚き / 喜び / びっくり / 音楽 / かじる)
+src/mark_config.h     host-testable な mark 色・形の列挙とローカル定義テーブル
+src/mark_renderer.h   M5GFX の単純図形による Bot mark 描画
+src/face.h            既存の反応・省電力状態機械と mark スプライト
 src/sound.h           音センサ (音量・背景フロア・スペクトル平坦度 → 急な大きい音 / 音楽の判定)
 src/hid.h             BLE HID キーボード (NimBLE)。PC にショートカットを送る
 src/pass.h            QR チケット (NVS 保存, QR 描画, Wi-Fi 受信サーバ, .pkpass 展開, 画像からの QR 読み取り)
@@ -206,11 +229,11 @@ tools/pass_test.py    チケット受信の自動テスト (リセット → 受
 src/main.cpp          入力 (ボタン, タッチ, IMU), 電源管理 (輝度, CPU クロック, deep sleep), 描画ループ
 src/diag/diag.cpp     診断ファーム (env:diag)。画面ずれ / IMU 軸 / 描画経路の確認
 tools/export_arduino_sketch.sh   Arduino IDE 用スケッチを生成
-tools/preview_face.py            顔レイアウトの PNG プレビュー
+tools/run_host_tests.py          mark table / cycling の host test runner
+tools/secret_scan.py             tracked source の secret scan (PlatformIO pre-build)
 ```
 
-描画は「顔スプライト (380x380, PSRAM) に正立で描く → 回転して全画面キャンバス (468x468, PSRAM) に貼る → パネルへ転送」。
-毛は全画面キャンバス側に顔と同じ角度で描いています。
+描画は「mark スプライト (380x380, PSRAM) に正立で描く → 回転して全画面キャンバス (468x468, PSRAM) に貼る → パネルへ転送」。
 
 ## 音の判定について
 
@@ -246,7 +269,7 @@ ESP32-S3 は Bluetooth LE のみ (Classic 非対応) なので、BLE HID キー�
 
 1. バッジの電源を入れる (起動ログに `[boot] ble hid "Makkuro Badge" advertising` が出る)
 2. Windows の 設定 → Bluetooth とデバイス → **デバイスの追加** → Bluetooth → **Makkuro Badge** を選ぶ
-3. 接続されるとバッジが震えてステータスに `ble connected` と出る。ミュートトグルは会議モード (顔を下へスワイプ) で表示される
+3. 接続されるとバッジが震えてステータスに `ble connected` と出る。ミュートトグルは会議モード (通常画面を下へスワイプ) で表示される
 
 一度ペアリングすれば次回からは自動で再接続します。切断されると再びアドバタイズします。
 
@@ -263,10 +286,10 @@ ESP32-S3 は Bluetooth LE のみ (Classic 非対応) なので、BLE HID キー�
 
 ### 会議モード
 
-顔を **下へスワイプ**すると会議モード、**上へスワイプ**で通常に戻ります (再起動しても維持)。会議中に顔の演出が邪魔にならないためのモードです。
+通常画面を **下へスワイプ**すると会議モード、**上へスワイプ**で通常に戻ります (再起動しても維持)。
 
-- 止まるもの: バイブ (`MEET_SILENT`)、マイクの音センサ (驚き / 音楽)、かじり、キョロキョロ、居眠りと deep sleep
-- 表示: 閉じた目、中央に大きな横型ミュートトグル (左 = MIC ON / 右 = MUTE)、状態 (MIC ON / MUTED)、PC 接続と電池
+- 止まるもの: バイブ (`MEET_SILENT`)、マイクの音センサ、居眠りと deep sleep
+- 表示: 選択中の小さい mark、中央に大きな横型ミュートトグル (左 = MIC ON / 右 = MUTE)、状態 (MIC ON / MUTED)、PC 接続と電池
 - 使えるもの: トグルでミュート切替、BtnA (Alt+Tab)、BtnB (無変換)、ダブルクリック / 長押しの設定操作
 - 明るさは通常の `MEET_BRIGHTNESS_PERCENT` %。どう持っても正立するのは通常と同じ
 
@@ -289,12 +312,12 @@ Apple Pay (クレジットカード / Suica) は NFC のセキュアエレメン
 
 1. `src/secrets.example.h` を `src/secrets.h` にコピーし、自宅の Wi-Fi と iPhone のテザリング (インターネット共有) の SSID / パスワードを書く。`secrets.h` は git に入らない
 2. ビルドして書き込む
-3. 受信待ちにすると一覧の Wi-Fi を順に試し、繋がると画面に `http://makkuro.local/pass` と IP が出る。どれにも繋がらないときはバッジ自身が AP (`Makkuro-Badge` / `makkuro1234`) になるので、iPhone をそれに繋いで同じ URL に送る
+3. 受信待ちにすると一覧の Wi-Fi を順に試し、繋がると画面に `http://makkuro.local/pass` と IP が出る。どれにも繋がらないときは安全のため受信を停止し、SoftAP は起動しない
 
 外出先ではまず iPhone のテザリングを ON にしてから受信待ちにすると、バッジがテザリングに繋がって受け取れます。
 
 - ESP32 は **2.4GHz のみ**。Aterm など SSID 末尾が `-a` (5GHz) / `-g` (2.4GHz) に分かれている機種では `-g` の方を書く
-  (`-a` でも繋がることはあるが `NO_AP_FOUND` で失敗しやすい)。一覧は 2 周まで試し、それでもだめなら AP になる
+  (`-a` でも繋がることはあるが `NO_AP_FOUND` で失敗しやすい)。一覧は 2 周まで試し、それでもだめなら SoftAP を起動せず受信を停止する
 - 動作確認は `tools/pass_test.py` (`config.h` の `PASS_DEBUG_RECEIVE_ON_BOOT = true` で書き込んでおくと、起動 3 秒後に
   自動で受信待ちになり、リセット → 送信 → バッジのログ表示までを PC だけで回せる)。実測: .pkpass、luma と MOVIX の
   スクリーンショットの 3 種で読み取り成功

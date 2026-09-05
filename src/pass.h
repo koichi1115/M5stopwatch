@@ -1,6 +1,6 @@
 // チケット (QR) モード: Wallet のパスやスクリーンショットを Wi-Fi で受け取り、QR を描き直して表示する
 //   - 保存: NVS (namespace "pass") に title / text を PASS_MAX 枚まで
-//   - 受信: Wi-Fi (secrets.h の一覧。繋がらなければ自分が AP になる) + 手書きの小さな HTTP サーバ
+//   - 受信: Wi-Fi (secrets.h の一覧。繋がらなければ安全に停止) + 手書きの小さな HTTP サーバ
 //       GET  /          … ブラウザ用の入力フォーム
 //       POST /pass      … 本文の種類で分岐
 //           .pkpass / zip  → pass.json から barcode.message と organizationName / description を取る
@@ -95,7 +95,7 @@ public:
     const int size = drawQr(sp, e.text.c_str(), (int)c, (int)(c + 22), PASS_QR_MAX_PX);
     // タイトル (上)
     sp.setFont(&fonts::lgfxJapanGothic_20);
-    sp.setTextColor(COLOR_EYE_WHITE);
+    sp.setTextColor(COLOR_UI_BRIGHT);
     String t = e.title.length() ? e.title : hostOf(e.text);
     if (sp.textWidth(t.c_str()) > 330) { sp.setFont(&fonts::lgfxJapanGothic_16); }
     while (t.length() > 4 && sp.textWidth(t.c_str()) > 340) t = t.substring(0, t.length() - 1);
@@ -127,7 +127,7 @@ public:
     WiFi.setSleep(false);          // BLE と共存中はスキャンが取りこぼしやすいので省電力を切る
     WiFi.setHostname(PASS_HOSTNAME);
     _round = 0;
-    tryNextNetwork(now);
+    if (!tryNextNetwork(now)) failNoNetwork();
   }
 
   void stopReceive() {
@@ -156,7 +156,7 @@ public:
           _state = State::Listening;
           printf("[pass] connected to %s ip=%s\n", WiFi.SSID().c_str(), _ip.toString().c_str());
         } else if (now - _stateSince > PASS_WIFI_CONNECT_TIMEOUT_MS) {
-          if (!tryNextNetwork(now)) startAp();
+          if (!tryNextNetwork(now)) failNoNetwork();
         }
         break;
       case State::Listening:
@@ -241,17 +241,9 @@ private:
       const int dots = (now / 400) % 4;
       sp.drawString(String("....").substring(0, dots).c_str(), (int)c, (int)(c - 30));
     } else {
-      if (_apMode) {
-        sp.drawString("Wi-Fi に繋がらないので AP になりました", (int)c, (int)(c - 70));
-        snprintf(buf, sizeof(buf), "SSID: %s", apSsid());
-        sp.drawString(buf, (int)c, (int)(c - 44));
-        snprintf(buf, sizeof(buf), "PASS: %s", apPass());
-        sp.drawString(buf, (int)c, (int)(c - 20));
-      } else {
-        snprintf(buf, sizeof(buf), "Wi-Fi: %s", WiFi.SSID().c_str());
-        sp.drawString(buf, (int)c, (int)(c - 60));
-      }
-      sp.setTextColor(COLOR_EYE_WHITE);
+      snprintf(buf, sizeof(buf), "Wi-Fi: %s", WiFi.SSID().c_str());
+      sp.drawString(buf, (int)c, (int)(c - 60));
+      sp.setTextColor(COLOR_UI_BRIGHT);
       snprintf(buf, sizeof(buf), "http://%s.local/pass", PASS_HOSTNAME);
       sp.drawString(buf, (int)c, (int)(c + 14));
       snprintf(buf, sizeof(buf), "http://%s/", _ip.toString().c_str());
@@ -271,9 +263,6 @@ private:
   }
 
   // ---------- Wi-Fi ----------
-  static const char* apSsid() { return "Makkuro-Badge"; }
-  static const char* apPass() { return "makkuro1234"; }
-
   // 一覧を順に試す。全部だめでも 2 周目まで粘る (BLE 共存中はスキャンを取りこぼすことがある)
   bool tryNextNetwork(uint32_t now) {
     const int n = sizeof(WIFI_NETWORKS) / sizeof(WIFI_NETWORKS[0]);
@@ -293,15 +282,10 @@ private:
     return false;
   }
 
-  void startAp() {
-    puts("[pass] no known wifi, starting AP");
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(apSsid(), apPass());
-    _ip = WiFi.softAPIP();
-    _apMode = true;
-    startServer();
-    _state = State::Listening;
+  void failNoNetwork() {
+    puts("[pass] no configured wifi; receive stopped");
+    snprintf(_lastError, sizeof(_lastError), "no configured Wi-Fi available");
+    stopReceive();
   }
 
   void startServer() {
@@ -584,7 +568,7 @@ private:
   int _count = 0, _current = 0;
   // 受信
   WiFiServer _server{80};
-  bool _receiving = false, _received = false, _apMode = false;
+  bool _receiving = false, _received = false;
   State _state = State::Off;
   uint32_t _stateSince = 0, _lastActivity = 0;
   int _netIndex = 0, _lastStatus = -1, _round = 0;

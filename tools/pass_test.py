@@ -21,7 +21,11 @@ s.rts = False; s.dtr = True
 t0 = time.time(); ok = False
 while time.time() - t0 < 150:
     txt = logtext()
-    if '[pass] connected' in txt or 'starting AP' in txt: ok = True; break
+    if '[pass] connected' in txt:
+        ok = True
+        break
+    if 'receive stopped' in txt:
+        break
     time.sleep(0.5)
 print('--- receive ready:', ok, f'({time.time()-t0:.1f}s)')
 if ok:

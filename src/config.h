@@ -25,49 +25,23 @@ constexpr bool ORIENT_SNAP_90 = false;
 constexpr float ORIENT_SNAP_HYSTERESIS_DEG = 12.0f;
 
 // ============================================================
-// 2. 目・顔の見た目
+// 2. Badge display
 // ============================================================
 // 画面の描画中心の補正 [px]。診断ファーム (env:diag) でドラッグして合わせた値。実測 2026-09-03
 constexpr int DISPLAY_OFFSET_X = -2;
 constexpr int DISPLAY_OFFSET_Y = -1;
 constexpr int FACE_SIZE = 380;          // 顔スプライトの一辺 [px] (回転して画面に貼る)
-constexpr int EYE_OFFSET_X = 84;        // 両目の中心からの横オフセット
-constexpr int EYE_OFFSET_Y = 4;         // 目の縦位置 (+で下)
-constexpr int EYE_RADIUS = 70;          // 白目の半径
-constexpr int PUPIL_RADIUS = 34;        // 黒目の半径
-constexpr float PUPIL_TRAVEL = 0.80f;   // 黒目が動ける範囲 (白目半径-黒目半径 に対する比率)
-constexpr uint16_t COLOR_EYE_WHITE = 0xFFFF;
-constexpr uint16_t COLOR_PUPIL = 0x0000;
-constexpr uint16_t COLOR_FUR = 0x31A6;   // 毛の色 (暗いグレー)
-constexpr uint16_t COLOR_FUR_TIP = 0x528A;
-constexpr int FUR_COUNT = 120;           // 縁の毛の本数
-constexpr int FUR_MIN_LEN = 12;
-constexpr int FUR_MAX_LEN = 30;
-constexpr uint16_t COLOR_BLUSH = 0xFB56; // 照れ (ピンク)
-constexpr uint16_t COLOR_ZZZ = 0x9CD3;
+constexpr int MARK_RADIUS = 112;         // selected geometric mark radius [px]
+constexpr uint16_t COLOR_UI_BRIGHT = 0xFFFF;
 constexpr uint16_t COLOR_UI = 0xC618;
 constexpr uint16_t COLOR_UI_ACCENT = 0x07FF;
 constexpr uint16_t COLOR_TRANSPARENT = 0x0001; // 顔スプライトの透過キー (ほぼ黒。描画には使わない)
 
 // 口 (口元に指を置き続けると出てきて、かじろうとする)
 constexpr uint32_t MOUTH_TOUCH_HOLD_MS = 2000;   // 口元に触れ続けてから口が出るまで
-constexpr int MOUTH_OFFSET_Y = 112;              // 口の中心 (顔中心から下へ)
-constexpr int MOUTH_HALF_W = 120;                // 全開時の口の半幅 (トトロのあくび級)
-constexpr int MOUTH_MAX_OPEN = 150;              // 最大の開き (高さ)
 constexpr int MOUTH_ZONE_HALF_W = 110;           // 「口元」と判定する範囲 (顔ローカル, px)
 constexpr int MOUTH_ZONE_TOP = 50;
 constexpr int MOUTH_ZONE_BOTTOM = 190;
-constexpr uint16_t COLOR_MOUTH = 0x6000;         // 口の中 (暗い赤)
-constexpr uint16_t COLOR_MOUTH_LINE = 0xC618;
-constexpr uint16_t COLOR_TONGUE = 0xF98E;
-constexpr uint16_t COLOR_TEETH = 0xFFFF;
-
-// 音符 (音楽を聴いているとき)
-constexpr int NOTES_MAX = 4;
-constexpr float NOTE_LIFE_SEC = 2.4f;
-constexpr uint32_t NOTE_SPAWN_MS = 520;
-constexpr float NOTE_RISE_PX = 150.0f;
-constexpr uint16_t COLOR_NOTE = 0xFFE0;          // 黄
 
 // 驚いてキョロキョロする時間
 constexpr uint32_t STARTLE_DURATION_MS = 2600;
@@ -195,7 +169,7 @@ constexpr bool PASS_ENABLED = true;
 constexpr int PASS_MAX = 8;                      // 保存する枚数 (NVS)
 constexpr const char* PASS_HOSTNAME = "makkuro"; // http://makkuro.local/pass
 constexpr uint32_t PASS_WIFI_TIMEOUT_MS = 180UL * 1000;   // 受信待ちを自動で止めるまで (最後の通信から)
-constexpr uint32_t PASS_WIFI_CONNECT_TIMEOUT_MS = 30000;  // 1 つの SSID を諦めるまで (一覧を 2 周してだめなら AP になる)
+constexpr uint32_t PASS_WIFI_CONNECT_TIMEOUT_MS = 30000;  // 1 つの SSID を諦めるまで (一覧を 2 周してだめなら受信停止)
 constexpr uint8_t PASS_BRIGHTNESS = 255;         // QR 表示中はスキャナ向けに最大
 constexpr int PASS_QR_MAX_PX = 300;              // QR の最大辺 (顔スプライト 380 の中)
 constexpr int PASS_QR_QUIET_PX = 14;             // 白い余白

@@ -1,0 +1,28 @@
+name: Firmware CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Scan tracked files for secrets
+        run: python3 tools/secret_scan.py
+
+      - name: Run host mark tests
+        run: python3 tools/run_host_tests.py
+
+      - name: Install PlatformIO
+        # The pioarduino platform's bundled esptool is not compatible with Click 8.2+.
+        run: python3 -m pip install platformio "click<8.2"
+
+      - name: Build M5Stack StopWatch firmware
+        run: pio run -e m5stopwatch
