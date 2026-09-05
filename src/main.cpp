@@ -344,7 +344,7 @@ static void drawLever() {
   else            sp.drawString("MUTE", (int)(cx + g.halfLen + 38), (int)cy);
 }
 
-// 会議モードの画面: 閉じた目 (静か) + 大きな横型ミュートトグル + 状態
+// 会議モードの画面: selected mark + 大きな横型ミュートトグル + 状態
 static void drawMeeting(uint32_t now) {
   M5Canvas& sp = face.sprite();
   const int c = sp.width() / 2;
