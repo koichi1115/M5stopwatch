@@ -85,6 +85,8 @@ static void releaseTouchAndOledReset() {
       }
     }
   }
+  // PWM1 (バイブ) の duty を 0 に。ハングして回りっぱなしのまま再起動しても必ず止まる
+  Wire.beginTransmission(0x4F); Wire.write(0x1B); Wire.write(0x00); Wire.write(0x00); Wire.endTransmission();
   Wire.beginTransmission(0x4F); Wire.write(0x05);                                               // GPIO_OUT_L
   if (Wire.endTransmission(false) == 0 && Wire.requestFrom(0x4F, 1) == 1) {
     const uint8_t out = Wire.read();
@@ -179,7 +181,7 @@ static void loadSettings() {
   orient.setOffset(prefs.getFloat("offset", 0.0f));
   brightnessIndex = prefs.getUChar("bri", DEFAULT_BRIGHTNESS_INDEX);
   styleIndex = prefs.getUChar("style", DEFAULT_STYLE_INDEX);
-  if (styleIndex > MARK_COUNT) styleIndex = DEFAULT_STYLE_INDEX;
+  if (styleIndex >= STYLE_COUNT) styleIndex = DEFAULT_STYLE_INDEX;
   if (brightnessIndex >= sizeof(BRIGHTNESS_LEVELS)) brightnessIndex = DEFAULT_BRIGHTNESS_INDEX;
   autoSleepEnabled = prefs.getBool("asleep", true);
   meetingMode = prefs.getBool("meet", false);
@@ -206,13 +208,7 @@ static void buzz(uint8_t level, uint32_t ms, uint32_t now) {
 }
 
 // 見た目の名前 ("makkuro" / "cyan circle" など)
-static const char* styleName(uint8_t idx) {
-  static char buf[32];
-  if (idx == STYLE_MAKKURO) return "makkuro";
-  const MarkDefinition& m = markAt((uint8_t)(idx - 1));
-  snprintf(buf, sizeof(buf), "%s %s", markColorName(m.color), markShapeName(m.shape));
-  return buf;
-}
+static const char* styleName(uint8_t idx) { return idx == STYLE_BOT ? "bot" : "makkuro"; }
 
 static bool leverVisible() { return HID_ENABLED && meetingMode; }   // ミュートトグルは会議モードだけ
 
@@ -385,7 +381,9 @@ static void drawMeeting(uint32_t now) {
     const uint16_t eye = micMuted ? 0x8410 : COLOR_EYE_WHITE;   // ミュート中は少し寝ぼけた薄い色
     for (int i = -1; i <= 1; i += 2) sp.fillArc(c + i * 62, c - 118, 26, 33, 20, 160, eye);
   } else {
-    drawBotMark(sp, c, c - 118, 36, markAt((uint8_t)(styleIndex - 1)));
+    // Bot: 小さな白い体と黒い目
+    sp.fillEllipse(c, c - 118, 34, 30, 0xE71C);
+    for (int i = -1; i <= 1; i += 2) sp.fillEllipse(c + i * 13, c - 120, 5, 10, COLOR_BOT_EYE);
   }
 
   sp.setFont(&fonts::Font2);
@@ -495,7 +493,7 @@ static void handleButtons(uint32_t now) {
   if (M5.BtnA.isPressed() && M5.BtnB.isPressed()) {
     if (!styleChordActive) {
       styleChordActive = true;
-      styleIndex = (uint8_t)((styleIndex + 1) % (MARK_COUNT + 1));
+      styleIndex = (uint8_t)((styleIndex + 1) % STYLE_COUNT);
       prefs.putUChar("style", styleIndex);
       statusUntil = now + STATUS_OVERLAY_MS;
       buzz(150, 60, now);
@@ -559,6 +557,7 @@ void setup() {
   checkBoardCacheBeforeBegin();
   M5.begin(cfg);
   checkBoardAfterBegin();   // 基板の誤認識なら再起動して戻ってこない
+  M5.Power.setVibration(0);
   bootMs = millis();
   printf("[boot] ioe1 gpio4(display power)=%d gpio5=%d brightness=%d\n",
          (int)M5.getIOExpander(0).getWriteValue(m5::M5IOE1_Class::gpio4),
@@ -819,6 +818,7 @@ void loop() {
     printf("[pass] now %d passes, showing #%d\n", pass.count(), pass.current() + 1);
   }
   face.update(in);
+  face.updateBot(in);
   if (face.takeChomp()) buzz(200, 50, now);   // かじった
 
   // ---- 電源まわり ----

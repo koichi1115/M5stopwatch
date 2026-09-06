@@ -31,21 +31,40 @@ constexpr float ORIENT_SNAP_HYSTERESIS_DEG = 12.0f;
 constexpr int DISPLAY_OFFSET_X = -2;
 constexpr int DISPLAY_OFFSET_Y = -1;
 
-// 見た目のスタイル: 0 = まっくろくろすけ、1.. = Bot マーク (mark_config.h の MARK_DEFINITIONS)。
-// BtnA + BtnB 同時押しで順に切り替わり、NVS に保存される。
+// 見た目のスタイル: 0 = まっくろくろすけ、1 = Bot。
+// BtnA + BtnB 同時押しで切り替わり、NVS に保存される。
 constexpr uint8_t STYLE_MAKKURO = 0;
+constexpr uint8_t STYLE_BOT = 1;
+constexpr uint8_t STYLE_COUNT = 2;
 constexpr uint8_t DEFAULT_STYLE_INDEX = STYLE_MAKKURO;
 
-// Bot マーク (図形の本体と、その上に乗る目)
-constexpr int MARK_RADIUS = 112;          // 図形の半径 [px]
-constexpr int BOT_EYE_OFFSET_X = 44;      // 目の横位置 (図形の中心から)
-constexpr int BOT_EYE_OFFSET_Y = -14;     // 目の縦位置 (+ で下)
-constexpr int BOT_EYE_RADIUS = 34;        // 白目の半径
-constexpr int BOT_PUPIL_RADIUS = 17;      // 黒目の半径
-constexpr int BOT_MOUTH_OFFSET_Y = 56;    // 口の中心 (図形の中心から下へ)
-constexpr float BOT_MOUTH_SCALE = 0.62f;  // 口の大きさ (まっくろくろすけに対する比率)
-constexpr uint16_t COLOR_BOT_EYE = 0xFFFF;      // 白目
-constexpr uint16_t COLOR_BOT_EYE_RIM = 0x18C3;  // 目の縁 (図形が明るい色なので暗い輪郭を付ける)
+// Bot (x.ai/bot 風): 白い柔らかい体がプニプニ変形し、黒い細長い目だけが乗る
+constexpr int MARK_RADIUS = 112;           // 会議モードの小さいアイコン等で使う図形の半径 [px]
+constexpr int BOT_BODY_RADIUS = 132;       // 体の基準半径 [px]
+constexpr int BOT_EYE_OFFSET_X = 46;       // 目の横位置 (体の中心から)
+constexpr int BOT_EYE_OFFSET_Y = -6;       // 目の縦位置 (+ で下)
+constexpr float BOT_EYE_W = 17.0f;         // 目の半幅
+constexpr float BOT_EYE_H = 34.0f;         // 目の半高 (細長い楕円)
+constexpr float BOT_EYE_TILT = 0.16f;      // 目の傾き (外側へ倒す量。0 で真っ直ぐ)
+constexpr float BOT_EYE_LINE_W = 7.0f;     // 閉じた目 / 笑った目の線の太さ
+constexpr float BOT_EYE_SHIFT_PX = 12.0f;  // 目が動く量 (黒目ではなく目そのものが動く)
+constexpr float BOT_LEAN_PX = 14.0f;       // 見ている方向へ体ごと傾く量
+constexpr int BOT_MOUTH_OFFSET_Y = 62;     // かじる口の位置 (体の中心から下へ)
+constexpr float BOT_MOUTH_W = 52.0f;       // 口の半幅
+constexpr float BOT_MOUTH_H = 44.0f;       // 口の半高 (全開時)
+constexpr uint32_t BOT_SHAPE_HOLD_MIN_MS = 2600;  // 次の形に変わるまでの時間
+constexpr uint32_t BOT_SHAPE_HOLD_MAX_MS = 6000;
+constexpr float BOT_MORPH_SEC = 0.9f;      // 形が変わりきるまでの時間 [秒]
+constexpr uint32_t BOT_LOOK_HOLD_MIN_MS = 1800;   // 向きを変えるまでの時間 (ゆっくり首を振る)
+constexpr uint32_t BOT_LOOK_HOLD_MAX_MS = 5200;
+constexpr float BOT_DENT_DEPTH = 0.34f;    // 指で押したときの凹みの深さ (半径に対する比率)
+constexpr float BOT_DENT_WIDTH = 0.62f;    // 凹みの広がり [rad] (小さいほど鋭く凹む)
+constexpr float BOT_TOUCH_TO_BODY = 1.35f; // タッチ座標 (顔ローカル正規化) → 体の半径 の換算
+constexpr float BOT_BODY_HIGHLIGHT = 0.86f; // 体の上端の明るさ (1.0 = 白)
+constexpr float BOT_BODY_SHADE = 0.30f;     // 体の下端の明るさ (0.0 = 黒)
+constexpr uint16_t COLOR_BOT_EYE = 0x18E3;    // 目 (ほぼ黒)
+constexpr uint16_t COLOR_BOT_MOUTH = 0x2124;  // かじる口
+constexpr uint16_t COLOR_BOT_THROAT = 0x0000;
 constexpr uint16_t COLOR_UI_BRIGHT = 0xFFFF;
 constexpr int FACE_SIZE = 380;          // 顔スプライトの一辺 [px] (回転して画面に貼る)
 constexpr int EYE_OFFSET_X = 84;        // 両目の中心からの横オフセット

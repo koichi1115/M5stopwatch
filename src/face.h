@@ -3,10 +3,8 @@
 #include <M5Unified.h>
 #include <math.h>
 #include "config.h"
-#include "mark_config.h"
-#include "mark_renderer.h"
-
-enum class Mood : uint8_t { Awake, Drowsy, Sleep, Surprised, Happy, Startled, Music, Bite };
+#include "mood.h"
+#include "bot.h"
 
 struct FaceInput {
   float dt;              // [s]
@@ -246,12 +244,23 @@ public:
   // 口を閉じた瞬間 (バイブ用)。1 回だけ true を返す
   bool takeChomp() { bool c = _chompPending; _chompPending = false; return c; }
 
+  // Bot の見た目の状態を進める (体の伸縮・形の morph・目の動き)。update() の後に呼ぶ
+  void updateBot(const FaceInput& in) {
+    _bot.update(_mood, in.dt, in.now, in.touchGazeX, in.touchGazeY, clamp01(_open * (1.0f - _blinkAmount)),
+                _mouthVisible, _mouthOpen, in.touching || _mood == Mood::Bite);
+  }
+
   // 顔スプライトに描く (回転は呼び出し側で)
-  // styleIndex: 0 = まっくろくろすけ、1.. = Bot マーク (mark_config.h)
+  // styleIndex: 0 = まっくろくろすけ、1 = Bot
   void draw(uint8_t styleIndex) {
     _sprite.fillScreen(COLOR_TRANSPARENT);
-    if (styleIndex == STYLE_MAKKURO) drawMakkuro();
-    else drawBot(markAt((uint8_t)(styleIndex - 1)));
+    if (styleIndex == STYLE_BOT) {
+      _bot.draw(_sprite, _sprite.width() / 2.0f, _sprite.width() / 2.0f, _scale);
+      drawNotes(_sprite.width() / 2.0f, _scale);
+      if (_mood == Mood::Sleep && _open < 0.15f) drawZzz(_sprite.width() / 2.0f, _scale);
+    } else {
+      drawMakkuro();
+    }
   }
 
   M5Canvas& sprite() { return _sprite; }
@@ -328,71 +337,25 @@ private:
     if (_mood == Mood::Sleep && _open < 0.15f) drawZzz(c, s);
   }
 
-  // ---- Bot マーク (図形の本体 + その上に乗る目)。表情や視線はまっくろくろすけと共通 ----
-  void drawBot(const MarkDefinition& mark) {
-    const float s = _scale;
-    const float c = _sprite.width() / 2.0f;
-    const float open = clamp01(_open * (1.0f - _blinkAmount));
-    float swayX = 0.0f, swayY = 0.0f;
-    if (_mood == Mood::Music) {
-      swayX = 6.0f * sinf(_time * 4.8f);
-      swayY = 4.0f * sinf(_time * 9.6f);
-    }
-    // 本体 (驚き / 呼吸で少し伸縮する)
-    const int radius = (int)(MARK_RADIUS * s * _eyeScale * _breath);
-    drawBotMark(_sprite, (int)c, (int)c, radius, mark);
-
-    // 図形ごとに目を置く高さを調整する (三角形は下が広いので少し下げる)
-    float eyeY = BOT_EYE_OFFSET_Y;
-    switch (mark.shape) {
-      case MarkShape::Triangle: eyeY += 34; break;
-      case MarkShape::Diamond:  eyeY += 10; break;
-      default: break;
-    }
-
-    if (_mouthVisible > 0.02f) drawMouth(c, s, BOT_MOUTH_OFFSET_Y + (int)(eyeY - BOT_EYE_OFFSET_Y), BOT_MOUTH_SCALE);
-
-    for (int i = -1; i <= 1; i += 2) {
-      const float cx = c + (i * BOT_EYE_OFFSET_X + swayX) * s;
-      const float cy = c + (eyeY + swayY) * s;
-      drawEye(cx, cy, open, s, BOT_EYE_RADIUS, BOT_PUPIL_RADIUS, COLOR_BOT_EYE_RIM);
-    }
-
-    if (_blush > 0.05f) {
-      const uint16_t col = lerpColor(markColorRgb565(mark.color), COLOR_BLUSH, _blush);
-      for (int i = -1; i <= 1; i += 2) {
-        _sprite.fillEllipse((int)(c + i * (BOT_EYE_OFFSET_X + 6) * s), (int)(c + (eyeY + BOT_EYE_RADIUS + 16) * s),
-                            (int)(18 * s), (int)(7 * s), col);
-      }
-    }
-
-    drawNotes(c, s);
-    if (_mood == Mood::Sleep && _open < 0.15f) drawZzz(c, s);
-  }
-
-  // 目を 1 つ描く。eyeR / pupilR で大きさを変えられる (Bot マークは小さめ)。
-  // rim != 0 なら白目に暗い輪郭を付ける (明るい図形の上でも見えるように)
-  void drawEye(float cx, float cy, float open, float s, float eyeR, float pupilR, uint16_t rim = 0) {
+  // 目を 1 つ描く (まっくろくろすけ: 白目 + 黒目)
+  void drawEye(float cx, float cy, float open, float s, float eyeR, float pupilR) {
     const float er = eyeR * s * _eyeScale * _breath;
     const float pr = pupilR * s * _pupilScale * _breath;
 
     if (_mood == Mood::Happy || _mood == Mood::Music) {
       // にっこり (^ ^)
-      if (rim) drawCurve(cx, cy + er * 0.25f, er * 0.95f, er * 0.85f, 205, 335, 10.0f * s, rim);
       drawCurve(cx, cy + er * 0.25f, er * 0.95f, er * 0.85f, 205, 335, 7.0f * s, COLOR_EYE_WHITE);
       return;
     }
     if (open < 0.07f) {
       // 閉じた目 (‿)
       const float ry = (_mood == Mood::Sleep) ? er * 0.35f : er * 0.12f;
-      if (rim) drawCurve(cx, cy - er * 0.15f, er * 0.9f, ry, 20, 160, 9.5f * s, rim);
       drawCurve(cx, cy - er * 0.15f, er * 0.9f, ry, 20, 160, 6.5f * s, COLOR_EYE_WHITE);
       return;
     }
 
     // 白目 (まぶたは縦につぶして表現)
     const float ry = er * open;
-    if (rim) _sprite.fillEllipse((int)cx, (int)cy, (int)(er + 3 * s), (int)(ry + 3 * s), rim);
     _sprite.fillEllipse((int)cx, (int)cy, (int)er, (int)ry, COLOR_EYE_WHITE);
 
     // 黒目
@@ -494,6 +457,7 @@ private:
   }
 
   M5Canvas _sprite;
+  BotRenderer _bot;
   float _scale = 1.0f;
   Mood _mood = Mood::Awake;
   float _time = 0.0f;
