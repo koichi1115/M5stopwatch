@@ -206,8 +206,8 @@ constexpr int ANCS_APP_FILTER_COUNT = sizeof(ANCS_APP_FILTER) / sizeof(ANCS_APP_
 // 通知の表示時間と、モードごとの知らせ方
 constexpr uint32_t NOTIFY_SHOW_MS = 8000;
 constexpr bool NOTIFY_VIBRATE = true;               // 会議モードでは MEET_SILENT により鳴らない
-constexpr uint8_t NOTIFY_VIB_LEVEL = 220;           // 通知のバイブ: 強めに一瞬だけ
-constexpr uint32_t NOTIFY_VIB_MS = 45;
+constexpr uint8_t NOTIFY_VIB_LEVEL = 90;            // 通知のバイブ: 弱く一瞬だけ
+constexpr uint32_t NOTIFY_VIB_MS = 25;
 constexpr uint16_t COLOR_NOTIFY = 0x07FF;
 // 修飾キー: 0x01 Ctrl / 0x02 Shift / 0x04 Alt / 0x08 Win
 // ミュート切替 (画面のレバー): Teams の Alt+A (Teams のウィンドウにフォーカスがあること)。
