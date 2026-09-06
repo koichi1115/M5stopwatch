@@ -6,6 +6,7 @@
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
 #include "config.h"
+#include "ancs.h"
 
 class BleKeyboardMini {
 public:
@@ -22,8 +23,11 @@ public:
     if (_started) return true;
     NimBLEDevice::init(name);
     NimBLEDevice::setPower(ESP_PWR_LVL_P3);
-    NimBLEDevice::setSecurityAuth(true, false, true);   // bonding, no MITM, secure connections
-    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+    // iOS は HID キーボードとのペアリングにパスキーを要求する。バッジには画面があるので
+    // 「数字を表示して相手に入力してもらう」方式にする (Windows も同じ方式で通る)。
+    NimBLEDevice::setSecurityAuth(true, true, true);    // bonding, MITM, secure connections
+    NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_ONLY);
+    NimBLEDevice::setSecurityPasskey(HID_PAIRING_PASSKEY);
     _server = NimBLEDevice::createServer();
     _server->setCallbacks(&_cb);
     _hid = new NimBLEHIDDevice(_server);
@@ -39,6 +43,17 @@ public:
     adv->addServiceUUID(_hid->getHidService()->getUUID());
     adv->setName(name);
     adv->enableScanResponse(true);
+    // ANCS の Service Solicitation (AD type 0x15 = 128bit UUID のリスト) をスキャン応答に載せる
+    {
+      NimBLEUUID ancs = AncsClient::serviceUuid();
+      const uint8_t* raw = ancs.getValue();
+      uint8_t ad[18];
+      ad[0] = 17; ad[1] = 0x15;
+      memcpy(ad + 2, raw, 16);
+      NimBLEAdvertisementData scan;
+      scan.addData(ad, sizeof(ad));
+      adv->setScanResponseData(scan);
+    }
     _started = adv->start();
     return _started;
   }
@@ -52,6 +67,12 @@ public:
 
   bool started() const { return _started; }
   bool connected() const { return _cb.connected; }
+  int peerCount() const { return _server ? _server->getConnectedCount() : 0; }
+  void attachAncs(AncsClient* a) { _cb.ancs = a; }
+  // ペアリング中に画面へ出す数字 (0 = 表示しない)
+  uint32_t pairingPasskey() const {
+    return (_cb.passkeyShownUntil && (int32_t)(millis() - _cb.passkeyShownUntil) < 0) ? _cb.passkey : 0;
+  }
   // 接続状態が変わったら 1 回だけ true を返す (通知用)
   bool takeConnectionChange() { bool c = _cb.changed; _cb.changed = false; return c; }
   void setBatteryLevel(uint8_t pct) { if (_hid) _hid->setBatteryLevel(pct); }
@@ -76,12 +97,30 @@ private:
   struct Cb : public NimBLEServerCallbacks {
     volatile bool connected = false;
     volatile bool changed = false;
+    AncsClient* ancs = nullptr;
+    volatile uint32_t passkeyShownUntil = 0;
+    volatile uint32_t passkey = 0;
+
     void onConnect(NimBLEServer* s, NimBLEConnInfo& info) override {
       connected = true; changed = true;
+      if (ancs) ancs->onPeerConnect(s, info.getConnHandle());
+      NimBLEDevice::startAdvertising();   // もう 1 台 (PC と iPhone) も繋げるようにする
     }
     void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
-      connected = false; changed = true;
+      connected = s->getConnectedCount() > 0;
+      changed = true;
+      if (ancs) ancs->onPeerDisconnect(info.getConnHandle());
       NimBLEDevice::startAdvertising();
+    }
+    uint32_t onPassKeyDisplay() override {
+      passkey = HID_PAIRING_PASSKEY;
+      passkeyShownUntil = millis() + 60000;   // 画面に出す (main.cpp が読む)
+      printf("[hid] pairing passkey: %06u\n", (unsigned)HID_PAIRING_PASSKEY);
+      return HID_PAIRING_PASSKEY;
+    }
+    void onAuthenticationComplete(NimBLEConnInfo& info) override {
+      passkeyShownUntil = 0;
+      printf("[hid] paired: encrypted=%d bonded=%d\n", (int)info.isEncrypted(), (int)info.isBonded());
     }
   };
 

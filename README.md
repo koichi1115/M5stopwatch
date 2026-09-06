@@ -226,6 +226,7 @@ src/mark_renderer.h   M5GFX の単純図形による Bot mark 描画
 src/face.h            気分の状態機械と 2 つの見た目の描画 (まっくろくろすけ / Bot mark + 目)
 src/sound.h           音センサ (音量・背景フロア・スペクトル平坦度 → 急な大きい音 / 音楽の判定)
 src/hid.h             BLE HID キーボード (NimBLE)。PC にショートカットを送る
+src/ancs.h            iPhone の通知の受信 (ANCS クライアント)
 src/pass.h            QR チケット (NVS 保存, QR 描画, Wi-Fi 受信サーバ, .pkpass 展開, 画像からの QR 読み取り)
 src/secrets.example.h Wi-Fi の認証情報の雛形 (secrets.h にコピーして使う。secrets.h は git に入らない)
 lib/quirc/            QR デコーダ quirc (vendored, ISC)
@@ -266,6 +267,34 @@ python tools/sound_calib.py        # COM6 固定。pyserial が必要 (PlatformI
 
 ただし PC スピーカーの音は端末から離れると自己ノイズと同程度にしかならないので、実際の調整は
 **手を叩く / 近くで話す / スマホで音楽を流す** など実環境の音源で `[snd]` ログか診断ファームの SOUND モードを見て行うのが確実です。
+
+## iPhone の通知 (ANCS)
+
+iPhone とペアリングすると、iPhone 側が通知サーバ (ANCS) になり、バッジがアプリ名・タイトル・本文を受け取ります。
+iPhone 側にアプリを入れる必要はありません。PC (キーボード) と iPhone (通知) は**同時に接続したまま**にできるので、
+モードで繋ぎ替える必要はありません。
+
+### ペアリング (iPhone)
+
+1. 設定 → Bluetooth → その他のデバイス に **Makkuro Badge** が出るので選ぶ
+2. バッジの画面に 6 桁の数字が出るので、iPhone にそれを入力する (`HID_PAIRING_PASSKEY`、既定 123456)
+3. 接続後、数秒で `[ancs] connected to iPhone notifications` がログに出る
+
+> iOS は BLE キーボードとのペアリングにパスキー入力を求めるため、ペアリング方式を
+> 「バッジが数字を表示 → 相手が入力」に変更しました。**この変更で以前の PC のペアリングは無効**になります。
+> Windows 側で一度デバイスを削除してから、ペアリングし直してください (同じ数字を入力します)。
+
+### 通知が来たとき
+
+| モード | 動作 |
+|---|---|
+| 通常 (まっくろくろすけ / Bot) | ハッとする反応 (Bot は体が伸びる) + バイブ + 8 秒バナー表示 |
+| 会議モード | バナーのみ (`MEET_SILENT` によりバイブは鳴らない) |
+| チケットモード | QR 表示を優先し、バナーは出さない |
+
+- **絞り込み**: `config.h` の `ANCS_APP_FILTER` に bundle id の一部を書く (既定 `"grok"`, `"x.ai"`)。空にすると全通知
+- 接続時に溜まっていた通知 (PreExisting) とサイレント通知は無視します
+- 表示時間は `NOTIFY_SHOW_MS`、`ANCS_ENABLED = false` で機能ごと無効
 
 ## PC のリモコン (BLE キーボード)
 

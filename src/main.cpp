@@ -150,6 +150,10 @@ static uint32_t vibUntil = 0;          // ノンブロッキングのバイブ�
 static bool musicShown = false;
 // BLE キーボードとミュートレバー
 static BleKeyboardMini kb;
+static AncsClient ancs;                // iPhone の通知
+static AncsNotification lastNote{};
+static uint32_t noteShownUntil = 0;
+static bool notePending = false;
 static bool micMuted = false;          // 端末側で覚えている状態 (PC からは返ってこない)
 static float leverKnob = 0.0f;         // 表示上のつまみ位置 0 = 上 (MIC) .. 1 = 下 (MUTE)
 static bool leverDragging = false;
@@ -329,6 +333,22 @@ static void drawFur(float angleDeg) {
   }
 }
 
+// 文字列を幅で折り返して中央揃えで描く (最大 maxLines 行)
+static void drawWrapped(M5Canvas& sp, const char* text, int cx, int y, int maxW, int lineH, int maxLines) {
+  if (!text || !text[0]) return;
+  String rest(text);
+  for (int line = 0; line < maxLines && rest.length(); ++line) {
+    int n = rest.length();
+    while (n > 1 && sp.textWidth(rest.substring(0, n).c_str()) > maxW) n--;
+    // UTF-8 の途中で切らない
+    while (n > 1 && ((uint8_t)rest[n] & 0xC0) == 0x80) n--;
+    String chunk = rest.substring(0, n);
+    if (line == maxLines - 1 && n < (int)rest.length()) chunk += "…";
+    sp.drawString(chunk.c_str(), cx, y + line * lineH);
+    rest = rest.substring(n);
+  }
+}
+
 // ミュートレバー (フェーダー風)。顔スプライトに描くので顔と一緒に回る。上 = MIC ON, 下 = MUTE
 static void drawLever() {
   M5Canvas& sp = face.sprite();
@@ -410,6 +430,48 @@ static void drawMeeting(uint32_t now) {
   sp.drawString(line, c, c + 130);
 }
 
+// 通知バナー: 上にアプリ名、中央にタイトル、下に本文の先頭
+static void drawNotification(uint32_t now) {
+  M5Canvas& sp = face.sprite();
+  const int c = sp.width() / 2;
+  const int left = c - 150, w = 300;
+  sp.fillRoundRect(left, c - 92, w, 184, 14, 0x0000);
+  sp.drawRoundRect(left, c - 92, w, 184, 14, COLOR_NOTIFY);
+  sp.setTextDatum(middle_center);
+  sp.setTextSize(1);
+
+  sp.setFont(&fonts::Font2);
+  sp.setTextColor(COLOR_NOTIFY);
+  sp.drawString(lastNote.app, c, c - 72);
+
+  sp.setFont(&fonts::lgfxJapanGothic_20);
+  sp.setTextColor(COLOR_UI_BRIGHT);
+  drawWrapped(sp, lastNote.title, c, c - 40, w - 24, 24, 2);
+
+  sp.setFont(&fonts::lgfxJapanGothic_16);
+  sp.setTextColor(COLOR_UI);
+  drawWrapped(sp, lastNote.message, c, c + 16, w - 24, 20, 4);
+}
+
+// ペアリング中のパスキー表示 (iPhone / PC 側で入力する数字)
+static void drawPasskey(uint32_t key) {
+  M5Canvas& sp = face.sprite();
+  const int c = sp.width() / 2;
+  sp.fillRoundRect(c - 140, c - 60, 280, 120, 14, 0x0000);
+  sp.drawRoundRect(c - 140, c - 60, 280, 120, 14, COLOR_UI_ACCENT);
+  sp.setTextDatum(middle_center);
+  sp.setTextSize(1);
+  sp.setFont(&fonts::lgfxJapanGothic_16);
+  sp.setTextColor(COLOR_UI);
+  sp.drawString("ペアリング: この数字を入力", c, c - 30);
+  sp.setFont(&fonts::Font7);
+  sp.setTextColor(COLOR_UI_BRIGHT);
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%06u", (unsigned)key);
+  sp.drawString(buf, c, c + 14);
+  sp.setTextSize(1);
+}
+
 static void drawStatus(uint32_t now) {
   M5Canvas& sp = face.sprite();
   const int w = sp.width();
@@ -443,6 +505,8 @@ static void drawStatus(uint32_t now) {
   snprintf(line, sizeof(line), "snd %4.0fdB fl %4.0f sfm %.2f act %.2f%s", sound.levelDb(), sound.floorDb(),
            sound.flatness(), sound.activeRatio(), sound.isMusic() ? " MUSIC" : "");
   sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "ancs %s  peers %d", ancs.connected() ? "on" : "off", kb.peerCount());
+  sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "ble %s  mic %s%s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
            micMuted ? "MUTED" : "on", meetingMode ? "  MEETING" : (passMode ? "  PASS" : ""));
   sp.drawString(line, x, y);
@@ -475,7 +539,9 @@ static void render(uint32_t now) {
     face.draw(styleIndex);
     if (leverVisible()) drawLever();
   }
-  if ((int32_t)(now - statusUntil) < 0) drawStatus(now);
+  if ((int32_t)(now - noteShownUntil) < 0) drawNotification(now);
+  else if ((int32_t)(now - statusUntil) < 0) drawStatus(now);
+  if (HID_ENABLED) { const uint32_t pk = kb.pairingPasskey(); if (pk) drawPasskey(pk); }
 
   if (out != &screen) M5.Display.startWrite();
   out->fillScreen(TFT_BLACK);
@@ -579,7 +645,10 @@ void setup() {
     motionCheckAfterTimerWake();   // 動いていなければ戻ってこない
   }
   if (SOUND_ENABLED) printf("[boot] mic %s\n", sound.begin() ? "ok" : "FAILED");
-  if (HID_ENABLED) printf("[boot] ble hid \"%s\" %s\n", HID_DEVICE_NAME, kb.begin(HID_DEVICE_NAME) ? "advertising" : "FAILED");
+  if (HID_ENABLED) {
+    if (ANCS_ENABLED) kb.attachAncs(&ancs);
+    printf("[boot] ble hid \"%s\" %s\n", HID_DEVICE_NAME, kb.begin(HID_DEVICE_NAME) ? "advertising" : "FAILED");
+  }
 
   M5.Display.setRotation(0);
   screenW = M5.Display.width();
@@ -640,6 +709,19 @@ void loop() {
     }
   }
 
+  // ---- iPhone の通知 (ANCS) ----
+  if (ANCS_ENABLED) {
+    ancs.update(now);
+    if (ancs.takeNotification(lastNote)) {
+      noteShownUntil = now + NOTIFY_SHOW_MS;
+      statusUntil = 0;
+      motion.touch(now);              // 通知が来たら起こす
+      notePending = true;             // 体がビクッと反応する (下で FaceInput に渡す)
+      if (NOTIFY_VIBRATE) buzz(170, 70, now);   // 会議モードでは MEET_SILENT により鳴らない
+      printf("[notify] %s: %s\n", lastNote.app, lastNote.title);
+    }
+  }
+
   // ---- BLE 接続状態 ----
   if (kb.takeConnectionChange()) {
     statusUntil = now + STATUS_OVERLAY_MS;
@@ -657,6 +739,7 @@ void loop() {
   in.shaken = motion.takeShake();
   in.autoSleepEnabled = autoSleepEnabled;
   in.loudNoise = sound.takeLoud();
+  if (notePending) { notePending = false; in.loudNoise = true; }   // 通知でも同じ「ハッとする」反応をする
   in.music = sound.isMusic();
   if (in.loudNoise && (motion.idleMs(now) < SOUND_SUPPRESS_MOTION_MS || M5.Touch.getCount() > 0)) {
     // 叩かれた / 持ち替えた / 触られた衝撃はマイクにも入る。空気の音ではないので無視
