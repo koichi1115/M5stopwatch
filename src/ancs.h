@@ -29,15 +29,20 @@ public:
 
   // ---- サーバ側のコールバックから呼ぶ ----
   void onPeerConnect(NimBLEServer* server, uint16_t handle) {
-    if (_handle != 0xFFFF) return;   // 既に別の相手を見ている
     _server = server;
-    _handle = handle;
-    _client = nullptr;
-    _state = State::Wait;
-    _nextTry = 0;
-    _tries = 0;
+    for (int i = 0; i < kMaxPeers; ++i) {
+      if (_cand[i].handle == handle) return;
+      if (_cand[i].handle == 0xFFFF) {
+        _cand[i] = {handle, 0, 0};
+        printf("[ancs] peer %u connected, will look for ANCS\n", (unsigned)handle);
+        return;
+      }
+    }
   }
   void onPeerDisconnect(uint16_t handle) {
+    for (int i = 0; i < kMaxPeers; ++i) {
+      if (_cand[i].handle == handle) _cand[i] = {0xFFFF, 0, 0};
+    }
     if (handle != _handle) return;
     _handle = 0xFFFF;
     _client = nullptr;
@@ -45,6 +50,7 @@ public:
     _ns = _ds = _cp = nullptr;
     _accLen = 0;
     _pendingUid = 0;
+    puts("[ancs] iPhone disconnected");
   }
 
   bool connected() const { return _state == State::Ready; }
@@ -57,32 +63,45 @@ public:
 
   // ---- loop から呼ぶ (ブロックしない) ----
   void update(uint32_t now) {
-    if (_handle == 0xFFFF) return;
+    if (_state != State::Ready) tryDiscover(now);
+    pump(now);
+  }
 
-    if (_state == State::Wait) {
-      if ((int32_t)(now - _nextTry) < 0) return;
-      _nextTry = now + ANCS_DISCOVER_RETRY_MS;
-      if (++_tries > ANCS_DISCOVER_TRIES) { _state = State::Idle; puts("[ancs] no ANCS on this peer (probably the PC)"); return; }
-      if (!_server) return;
-      NimBLEClient* c = _server->getClient(_handle);
-      if (!c || !c->isConnected()) return;
+private:
+  void tryDiscover(uint32_t now) {
+    if (!_server) return;
+    if ((int32_t)(now - _nextTry) < 0) return;
+    _nextTry = now + ANCS_DISCOVER_RETRY_MS;
+    for (int i = 0; i < kMaxPeers; ++i) {
+      Cand& cd = _cand[i];
+      if (cd.handle == 0xFFFF || cd.tries > ANCS_DISCOVER_TRIES) continue;
+      cd.tries++;
+      NimBLEClient* c = _server->getClient(cd.handle);
+      if (!c || !c->isConnected()) continue;
       // iOS はボンディングが済むまで ANCS を見せない
-      NimBLEConnInfo info = NimBLEDevice::getServer()->getPeerInfoByHandle(_handle);
-      if (!info.isEncrypted()) return;
+      NimBLEConnInfo info = _server->getPeerInfoByHandle(cd.handle);
+      if (!info.isEncrypted()) { cd.tries--; continue; }   // 暗号化待ちは回数に数えない
       NimBLERemoteService* svc = c->getService(serviceUuid());
-      if (!svc) return;
+      if (!svc) {
+        if (cd.tries == ANCS_DISCOVER_TRIES)
+          printf("[ancs] peer %u has no ANCS (probably the PC)\n", (unsigned)cd.handle);
+        continue;
+      }
+      _handle = cd.handle;
       _client = c;
       _ns = svc->getCharacteristic(NimBLEUUID("9FBF120D-6301-42D9-8C58-25E699A21DBD"));
       _cp = svc->getCharacteristic(NimBLEUUID("69D1D8F3-45E1-49A8-9821-9BBDFDAAD9D9"));
       _ds = svc->getCharacteristic(NimBLEUUID("22EAC6E9-24D6-4BB5-BE44-B36ACE7C7BFB"));
-      if (!_ns || !_cp || !_ds) { puts("[ancs] characteristics missing"); return; }
+      if (!_ns || !_cp || !_ds) { puts("[ancs] characteristics missing"); continue; }
       _self = this;
-      if (!_ds->subscribe(true, dsCb) || !_ns->subscribe(true, nsCb)) { puts("[ancs] subscribe failed"); return; }
+      if (!_ds->subscribe(true, dsCb) || !_ns->subscribe(true, nsCb)) { puts("[ancs] subscribe failed"); continue; }
       _state = State::Ready;
-      puts("[ancs] connected to iPhone notifications");
+      printf("[ancs] subscribed on peer %u - iPhone notifications are live\n", (unsigned)_handle);
       return;
     }
+  }
 
+  void pump(uint32_t now) {
     // 内容の取得は loop 側で行う (BLE のコールバック内で書き込まない)
     if (_state == State::Ready && _pendingUid && !_awaitingData) {
       const uint32_t uid = _pendingUid;
@@ -97,21 +116,29 @@ public:
       cmd[n++] = 0x00;                         // AppIdentifier (長さ指定なし)
       cmd[n++] = 0x01; cmd[n++] = (uint8_t)(sizeof(_note.title) - 1); cmd[n++] = 0x00;   // Title
       cmd[n++] = 0x03; cmd[n++] = (uint8_t)(sizeof(_note.message) - 1); cmd[n++] = 0x00; // Message
+      printf("[ancs] requesting attributes for uid %u\n", (unsigned)uid);
       if (!_cp->writeValue(cmd, n, true)) { _awaitingData = false; puts("[ancs] control point write failed"); }
     }
     if (_awaitingData && now - _awaitSince > 3000) _awaitingData = false;   // 応答が来なければ諦める
+    if ((_preExisting || _silent) && now - _lastSkipLog > 3000) {
+      _lastSkipLog = now;
+      printf("[ancs] skipped %u pre-existing / %u silent notifications\n", (unsigned)_preExisting, (unsigned)_silent);
+      _preExisting = _silent = 0;
+    }
   }
 
-private:
   enum class State : uint8_t { Idle, Wait, Ready };
+  struct Cand { uint16_t handle; uint8_t tries; uint8_t pad; };
+  static constexpr int kMaxPeers = 3;
+  Cand _cand[kMaxPeers] = {{0xFFFF, 0, 0}, {0xFFFF, 0, 0}, {0xFFFF, 0, 0}};
 
   // ---- Notification Source: 8 バイト (eventID, flags, category, count, uid[4]) ----
   static void nsCb(NimBLERemoteCharacteristic* c, uint8_t* d, size_t len, bool notify) {
     if (!_self || len < 8) return;
     const uint8_t event = d[0], flags = d[1], category = d[2];
     if (event != 0) return;                    // 追加以外 (変更 / 削除) は無視
-    if (flags & 0x04) return;                  // PreExisting: 接続時に溜まっていた分は無視
-    if (ANCS_IGNORE_SILENT && (flags & 0x01)) return;
+    if (flags & 0x04) { _self->_preExisting++; return; }   // 接続直後にまとめて届く分 (数だけ数える)
+    if (ANCS_IGNORE_SILENT && (flags & 0x01)) { _self->_silent++; return; }
     uint32_t uid;
     memcpy(&uid, d + 4, 4);
     _self->_stageCategory = category;
@@ -189,11 +216,12 @@ private:
   NimBLERemoteCharacteristic *_ns = nullptr, *_cp = nullptr, *_ds = nullptr;
   uint16_t _handle = 0xFFFF;
   State _state = State::Idle;
-  uint32_t _nextTry = 0, _awaitSince = 0;
-  int _tries = 0;
+  uint32_t _nextTry = 0, _awaitSince = 0, _lastSkipLog = 0;
+
   volatile uint32_t _pendingUid = 0, _stageUid = 0;
   volatile uint8_t _stageCategory = 0;
   volatile bool _awaitingData = false, _ready = false;
+  volatile uint16_t _preExisting = 0, _silent = 0;
   uint8_t _acc[512];
   volatile size_t _accLen = 0;
   AncsNotification _note{};

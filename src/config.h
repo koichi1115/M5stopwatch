@@ -201,11 +201,13 @@ constexpr uint32_t ANCS_DISCOVER_RETRY_MS = 2000;   // ANCS を探し直す間�
 constexpr int ANCS_DISCOVER_TRIES = 8;              // これだけ試して見つからなければ諦める (PC 側の接続)
 constexpr bool ANCS_IGNORE_SILENT = true;           // サイレント通知は無視
 // 通すアプリ (bundle id の部分一致、小文字で書く)。空にすると全部通す
-constexpr const char* ANCS_APP_FILTER[] = {"grok", "x.ai"};
+constexpr const char* ANCS_APP_FILTER[] = {};   // 空 = 全アプリを通す (Grok だけにするなら {"grok", "x.ai"})
 constexpr int ANCS_APP_FILTER_COUNT = sizeof(ANCS_APP_FILTER) / sizeof(ANCS_APP_FILTER[0]);
 // 通知の表示時間と、モードごとの知らせ方
 constexpr uint32_t NOTIFY_SHOW_MS = 8000;
 constexpr bool NOTIFY_VIBRATE = true;               // 会議モードでは MEET_SILENT により鳴らない
+constexpr uint8_t NOTIFY_VIB_LEVEL = 220;           // 通知のバイブ: 強めに一瞬だけ
+constexpr uint32_t NOTIFY_VIB_MS = 45;
 constexpr uint16_t COLOR_NOTIFY = 0x07FF;
 // 修飾キー: 0x01 Ctrl / 0x02 Shift / 0x04 Alt / 0x08 Win
 // ミュート切替 (画面のレバー): Teams の Alt+A (Teams のウィンドウにフォーカスがあること)。

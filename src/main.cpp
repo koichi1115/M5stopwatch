@@ -444,13 +444,19 @@ static void drawNotification(uint32_t now) {
   sp.setTextColor(COLOR_NOTIFY);
   sp.drawString(lastNote.app, c, c - 72);
 
-  sp.setFont(&fonts::lgfxJapanGothic_20);
-  sp.setTextColor(COLOR_UI_BRIGHT);
-  drawWrapped(sp, lastNote.title, c, c - 40, w - 24, 24, 2);
-
-  sp.setFont(&fonts::lgfxJapanGothic_16);
-  sp.setTextColor(COLOR_UI);
-  drawWrapped(sp, lastNote.message, c, c + 16, w - 24, 20, 4);
+  if (lastNote.title[0]) {
+    sp.setFont(&fonts::lgfxJapanGothic_20);
+    sp.setTextColor(COLOR_UI_BRIGHT);
+    drawWrapped(sp, lastNote.title, c, c - 40, w - 24, 24, 2);
+    sp.setFont(&fonts::lgfxJapanGothic_16);
+    sp.setTextColor(COLOR_UI);
+    drawWrapped(sp, lastNote.message, c, c + 16, w - 24, 20, 4);
+  } else {
+    // タイトルが無い通知は本文を主役にする
+    sp.setFont(&fonts::lgfxJapanGothic_20);
+    sp.setTextColor(COLOR_UI_BRIGHT);
+    drawWrapped(sp, lastNote.message, c, c - 34, w - 24, 26, 5);
+  }
 }
 
 // ペアリング中のパスキー表示 (iPhone / PC 側で入力する数字)
@@ -717,7 +723,7 @@ void loop() {
       statusUntil = 0;
       motion.touch(now);              // 通知が来たら起こす
       notePending = true;             // 体がビクッと反応する (下で FaceInput に渡す)
-      if (NOTIFY_VIBRATE) buzz(170, 70, now);   // 会議モードでは MEET_SILENT により鳴らない
+      if (NOTIFY_VIBRATE) buzz(NOTIFY_VIB_LEVEL, NOTIFY_VIB_MS, now);   // 一瞬だけブルッ (会議モードでは鳴らない)
       printf("[notify] %s: %s\n", lastNote.app, lastNote.title);
     }
   }
