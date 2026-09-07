@@ -286,3 +286,22 @@ constexpr int GALLERY_MAX_FILES = 20;
 constexpr size_t GALLERY_MAX_BYTES = 400UL * 1024;   // 1 枚の上限
 constexpr uint8_t GALLERY_BRIGHTNESS = 200;          // 絵を見るので明るめ
 constexpr int GALLERY_SIZE = 466;                    // 画像スプライトの一辺 (画面と同じ)
+
+// ============================================================
+// 11. 時計モード (外周のゲージで時、中央の数字で分)
+// ============================================================
+constexpr bool CLOCKFACE_ENABLED = true;
+constexpr float CLOCKFACE_GAUGE_R = 184.0f;        // 外周ゲージの外側の半径 (顔スプライト 380 基準)
+constexpr float CLOCKFACE_GAUGE_THICK = 26.0f;     // ゲージの太さ
+constexpr float CLOCKFACE_GAUGE_GAP_DEG = 2.6f;    // 目盛りの間の隙間 [度]
+constexpr int CLOCKFACE_MINUTE_Y = 6;              // 分の数字の位置 (顔中心から上へ)
+constexpr int CLOCKFACE_HOUR_Y = 62;               // 時の位置 (下へ)
+constexpr int CLOCKFACE_SECOND_Y = 96;             // 秒の位置
+constexpr int CLOCKFACE_DATE_Y = 120;              // 日付の位置
+constexpr uint16_t COLOR_CLOCK_ON = 0x07FF;    // 過ぎた時間 (シアン)
+constexpr uint16_t COLOR_CLOCK_NOW = 0xFFE0;   // いまの時間 (黄)
+constexpr uint16_t COLOR_CLOCK_OFF = 0x2124;   // これからの時間
+constexpr uint16_t COLOR_CLOCK_MINUTE = 0xFFFF;
+constexpr uint16_t COLOR_CLOCK_SUB = 0x8410;
+constexpr const char* CLOCKFACE_TZ = "JST-9";
+constexpr const char* CLOCKFACE_NTP_SERVER = "ntp.nict.jp";

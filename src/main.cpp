@@ -30,6 +30,7 @@
 #include "hid.h"
 #include "pass.h"
 #include "gallery.h"
+#include "clock.h"
 
 #include <nvs.h>
 #include <esp_system.h>
@@ -167,6 +168,8 @@ static uint32_t meetingToggleFlashUntil = 0;
 // チケット (QR) モード
 static PassManager pass;
 static Gallery gallery;
+static ClockFace clockFace;
+static bool clockMode = false;        // 時計モード
 static bool galleryMode = false;      // 円形画面いっぱいに画像を出すモード
 static bool passMode = false;
 static uint32_t passHoldStart = 0;     // QR 長押し (削除) の開始時刻
@@ -544,7 +547,7 @@ static void drawStatus(uint32_t now) {
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "ble %s  mic %s%s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
            micMuted ? "MUTED" : "on",
-           meetingMode ? "  MEETING" : (passMode ? "  PASS" : (galleryMode ? "  GALLERY" : "")));
+           meetingMode ? "  MEETING" : (passMode ? "  PASS" : (galleryMode ? "  GALLERY" : (clockMode ? "  CLOCK" : ""))));
   sp.drawString(line, x, y);
 
   // 電池アーク (下部, 左から右へ伸びる)
@@ -610,7 +613,10 @@ static void render(uint32_t now) {
     else M5.Display.endWrite();
     return;
   }
-  if (passMode) {
+  if (clockMode) {
+    face.sprite().fillScreen(COLOR_TRANSPARENT);
+    clockFace.draw(face.sprite(), face.sprite().width() / 2.0f, now);
+  } else if (passMode) {
     face.sprite().fillScreen(COLOR_TRANSPARENT);
     pass.draw(face.sprite(), face.sprite().width() / 2.0f, now);
   } else if (meetingMode) {
@@ -626,7 +632,7 @@ static void render(uint32_t now) {
 
   if (out != &screen) M5.Display.startWrite();
   out->fillScreen(TFT_BLACK);
-  if (!meetingMode && !passMode && styleIndex == STYLE_MAKKURO) drawFur(angle);
+  if (!meetingMode && !passMode && !clockMode && styleIndex == STYLE_MAKKURO) drawFur(angle);
   if (FACE_ANTIALIAS) face.sprite().pushRotatedWithAA(out, angle, COLOR_TRANSPARENT);
   else face.sprite().pushRotateZoom(out, screenW / 2.0f + DISPLAY_OFFSET_X, screenH / 2.0f + DISPLAY_OFFSET_Y, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
   if (out == &screen) screen.pushSprite(0, 0);
@@ -647,8 +653,15 @@ static void cycleMode(uint32_t now) {
     else pass.stopReceive();
   } else if (galleryMode) {          // ギャラリー → 通常
     galleryMode = false;
+    clockMode = false;
     pass.stopReceive();
     puts("[mode] gallery off");
+  } else if (clockMode) {            // 時計 → 会議
+    clockMode = false;
+    setMeetingMode(true, now);
+  } else if (CLOCKFACE_ENABLED) {        // 通常 → 時計
+    clockMode = true;
+    puts("[mode] clock ON");
   } else {                           // 通常 → 会議
     setMeetingMode(true, now);
   }
@@ -931,6 +944,7 @@ void loop() {
         muteArmed = false;
         if (passMode) { passMode = false; pass.stopReceive(); passHoldStart = 0; buzz(120, 40, now); puts("[mode] pass off"); }
         else if (galleryMode) { galleryMode = false; pass.stopReceive(); buzz(120, 40, now); puts("[mode] gallery off"); }
+        else if (clockMode) { clockMode = false; buzz(120, 40, now); puts("[mode] clock off"); }
         else if (meetingMode) setMeetingMode(false, now);
         else swipeDone = false;   // すでに通常モード
       } else if (galleryMode) {
@@ -1008,7 +1022,7 @@ void loop() {
         statusUntil = now + STATUS_OVERLAY_MS;
         printf("[hid] key target -> %s\n", kb.keyTargetName());
       }
-    } else if (t.wasClicked() && !onMute && !meetingMode && !passMode) in.tapped = true;
+    } else if (t.wasClicked() && !onMute && !meetingMode && !passMode && !clockMode) in.tapped = true;
     if (t.isPressed() && !passMode) {
       pressed = true;
       motion.touch(now);
@@ -1058,7 +1072,7 @@ void loop() {
   in.idleMs = motion.idleMs(now);
   in.moving = in.idleMs < 300;
 
-  if (meetingMode || passMode || galleryMode) {
+  if (meetingMode || passMode || galleryMode || clockMode) {
     // 会議モード / チケットモード: 顔は動かさず、寝もしない (画面を見られる状態を保つ)
     motion.touch(now);
     in = FaceInput{};
@@ -1066,6 +1080,13 @@ void loop() {
   }
   // ---- チケット受信 (Wi-Fi) ----
   pass.update(now);
+  {
+    // Wi-Fi に繋がっている間に一度だけ時計を合わせる (RTC は電池で保持される)
+    static bool ntpDone = false;
+    if (CLOCKFACE_ENABLED && !ntpDone && pass.listening() && !pass.apMode()) {
+      ntpDone = ClockFace::syncFromNtp();
+    }
+  }
   if (PASS_DEBUG_RECEIVE_ON_BOOT) {   // 開発用: 起動 3 秒後に受信待ちへ + ループの生存確認
     static bool debugStarted = false;
     if (!debugStarted && now > 3000) { debugStarted = true; passMode = true; pass.startReceive(now); puts("[debug] pass receive started"); }
