@@ -54,6 +54,8 @@ public:
   }
 
   bool connected() const { return _state == State::Ready; }
+  // 通知を受けている相手 (iPhone) の接続ハンドル。無ければ 0xFFFF
+  uint16_t peerHandle() const { return _state == State::Ready ? _handle : 0xFFFF; }
   bool takeNotification(AncsNotification& out) {
     if (!_ready) return false;
     out = _note;

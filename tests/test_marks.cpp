@@ -14,37 +14,44 @@ void require(bool condition, const char* name) {
 }
 
 void testDefaultSelection() {
-  require(DEFAULT_MARK_INDEX == 0, "default selection is the first mark");
-  require(markAt(DEFAULT_MARK_INDEX).color == MarkColor::Cyan,
-          "default selection has the configured color");
-  require(markAt(DEFAULT_MARK_INDEX).shape == MarkShape::Circle,
-          "default selection has the configured shape");
+  require(shapeAt(DEFAULT_SHAPE_INDEX) == MarkShape::Blob,
+          "default shape is the rounded blob");
+  require(colorAt(DEFAULT_COLOR_INDEX) == MarkColor::Purple,
+          "default colour is purple");
 }
 
 void testDefinitionsUseEnums() {
-  require(MARK_COUNT == 5, "mark table exposes five local definitions");
-  require(markAt(1).color == MarkColor::Green &&
-              markAt(1).shape == MarkShape::Square,
-          "mark definitions pair enumerated color and shape");
+  require(MARK_SHAPE_COUNT == 8, "shape table matches the eight shapes offered by the app");
+  require(MARK_COLOR_COUNT == 11, "colour table matches the eleven colours offered by the app");
+  require(shapeAt(0) == MarkShape::Circle && shapeAt(7) == MarkShape::Drop,
+          "shape table runs from circle to drop");
 }
 
 void testSelectionCycles() {
-  uint8_t index = DEFAULT_MARK_INDEX;
-  for (size_t i = 1; i < MARK_COUNT; ++i) {
-    index = nextMarkIndex(index);
-    require(index == i, "selection advances to the next mark");
+  uint8_t index = 0;
+  for (size_t i = 1; i < MARK_SHAPE_COUNT; ++i) {
+    index = nextShapeIndex(index);
+    require(index == i, "shape selection advances");
   }
-  require(nextMarkIndex(index) == DEFAULT_MARK_INDEX,
-          "selection wraps from the last mark to the first");
+  require(nextShapeIndex(index) == 0, "shape selection wraps around");
+
+  uint8_t c = 0;
+  for (size_t i = 1; i < MARK_COLOR_COUNT; ++i) {
+    c = nextColorIndex(c);
+    require(c == i, "colour selection advances");
+  }
+  require(nextColorIndex(c) == 0, "colour selection wraps around");
 }
 
 void testInvalidSelectionFailsClosed() {
-  require(normalizeMarkIndex(255) == DEFAULT_MARK_INDEX,
-          "invalid persisted selection falls back to default");
-  require(&markAt(255) == &markAt(DEFAULT_MARK_INDEX),
-          "invalid lookup returns the default definition");
-  require(nextMarkIndex(255) == 1,
-          "cycling an invalid selection starts from the default");
+  require(normalizeShapeIndex(255) == DEFAULT_SHAPE_INDEX,
+          "invalid persisted shape falls back to the default");
+  require(normalizeColorIndex(255) == DEFAULT_COLOR_INDEX,
+          "invalid persisted colour falls back to the default");
+  require(shapeAt(255) == shapeAt(DEFAULT_SHAPE_INDEX),
+          "invalid shape lookup returns the default");
+  require(colorAt(255) == colorAt(DEFAULT_COLOR_INDEX),
+          "invalid colour lookup returns the default");
 }
 
 }  // namespace

@@ -37,12 +37,20 @@ public:
     // ---- 形の morph (プニプニ): 一定時間ごとに次の形へ ----
     if ((int32_t)(now - _nextShape) >= 0) {
       _shapeFrom = _shapeTo;
-      _shapeTo = (uint8_t)((_shapeTo + 1 + random(MARK_COUNT - 1)) % MARK_COUNT);
+      _shapeTo = (uint8_t)((_shapeTo + 1 + random(MARK_SHAPE_COUNT - 1)) % MARK_SHAPE_COUNT);
       _morph = 0.0f;
       _nextShape = now + BOT_SHAPE_HOLD_MIN_MS + random(BOT_SHAPE_HOLD_MAX_MS - BOT_SHAPE_HOLD_MIN_MS);
       _wobble += 0.5f;   // 形が変わる瞬間にプルッと揺れる
     }
     if (_morph < 1.0f) _morph = clamp01(_morph + dt / BOT_MORPH_SEC);
+    // 色は形とは別のタイミングで変える
+    if ((int32_t)(now - _nextColor) >= 0) {
+      _colorFrom = _colorTo;
+      _colorTo = (uint8_t)((_colorTo + 1 + random(MARK_COLOR_COUNT - 1)) % MARK_COLOR_COUNT);
+      _colorMorph = 0.0f;
+      _nextColor = now + BOT_COLOR_HOLD_MIN_MS + random(BOT_COLOR_HOLD_MAX_MS - BOT_COLOR_HOLD_MIN_MS);
+    }
+    if (_colorMorph < 1.0f) _colorMorph = clamp01(_colorMorph + dt / BOT_COLOR_MORPH_SEC);
 
     // ---- squash & stretch の目標値 (気分ごと) ----
     float targetSquash = 0.0f;   // + で縦に潰れる、- で縦に伸びる
@@ -104,6 +112,8 @@ public:
       }
       _nextLook = now + BOT_LOOK_HOLD_MIN_MS + random(BOT_LOOK_HOLD_MAX_MS - BOT_LOOK_HOLD_MIN_MS);
     }
+    updateEyePose(mood, dt, now);
+
     const float lookRate = (mood == Mood::Startled) ? 8.0f : (follow ? 5.0f : 2.4f);
     _lookX += (_targetX - _lookX) * clamp01(dt * lookRate);
     _lookY += (_targetY - _lookY) * clamp01(dt * lookRate);
@@ -126,8 +136,10 @@ public:
     const float baseR = BOT_BODY_RADIUS * s * _scale;
     // squash: 面積を保つように縦横を反対に伸縮させる
     const float sq = _squash;
-    const float ry = baseR * (1.0f - sq);
-    const float rx = baseR * (1.0f + sq * 0.72f);
+    float ax, ay;
+    aspect(ax, ay);
+    const float ry = baseR * (1.0f - sq) * ay;
+    const float rx = baseR * (1.0f + sq * 0.72f) * ax;
     // 見ている方向へ体ごと少し傾ける
     const float leanX = _lookX * BOT_LEAN_PX * s;
     const float leanY = _lookY * BOT_LEAN_PX * 0.6f * s;
@@ -198,17 +210,28 @@ private:
   static float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
   static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-  // 形ごとの極座標パラメータ: r(θ) = 1 + w * cos(N * (θ - rot))
-  struct ShapeParam { float n, w, rot; };
+  // 形ごとの極座標パラメータ: r(θ) = 1 + w * cos(N * (θ - rot))、さらに縦横比 (ax, ay)
+  struct ShapeParam { float n, w, rot, ax, ay; };
   static ShapeParam shapeParam(uint8_t index) {
-    switch (markAt(index).shape) {
-      case MarkShape::Circle:   return {0.0f, 0.00f, 0.0f};
-      case MarkShape::Square:   return {4.0f, 0.13f, 0.7854f};
-      case MarkShape::Triangle: return {3.0f, 0.20f, -1.5708f};
-      case MarkShape::Diamond:  return {4.0f, 0.17f, -1.5708f};
-      case MarkShape::Hexagon:  return {6.0f, 0.09f, 0.0f};
+    switch (shapeAt(index)) {
+      case MarkShape::Circle:        return {0.0f, 0.00f,  0.0000f, 1.06f, 0.94f};
+      case MarkShape::Blob:          return {4.0f, 0.04f,  0.7854f, 1.04f, 0.98f};
+      case MarkShape::RoundedSquare: return {4.0f, 0.13f,  0.7854f, 1.00f, 1.00f};
+      case MarkShape::Pill:          return {0.0f, 0.00f,  0.0000f, 1.45f, 0.72f};
+      case MarkShape::Triangle:      return {3.0f, 0.21f, -1.5708f, 1.06f, 1.00f};
+      case MarkShape::Hexagon:       return {6.0f, 0.09f,  0.0000f, 1.00f, 1.00f};
+      case MarkShape::Cloud:         return {5.0f, 0.15f, -1.5708f, 1.10f, 0.92f};
+      case MarkShape::Drop:          return {1.0f, 0.26f, -1.5708f, 0.94f, 1.06f};
     }
-    return {0.0f, 0.0f, 0.0f};
+    return {0.0f, 0.0f, 0.0f, 1.0f, 1.0f};
+  }
+
+  // 形の縦横比 (morph 中は混ぜる)
+  void aspect(float& ax, float& ay) const {
+    const ShapeParam a = shapeParam(_shapeFrom), b = shapeParam(_shapeTo);
+    const float m = smoothstep(_morph);
+    ax = a.ax + (b.ax - a.ax) * m;
+    ay = a.ay + (b.ay - a.ay) * m;
   }
 
   // 2 つの形をブレンドし、さらにゼリーの揺れを足した半径 (1.0 が基準)
@@ -235,69 +258,102 @@ private:
 
   static float smoothstep(float t) { t = clamp01(t); return t * t * (3.0f - 2.0f * t); }
 
-  // パレットの色 (mark_config.h の MarkColor) を RGB で取り出す
+  // パレットの色 (mark_config.h の MarkColor) を RGB で取り出す。実物の作成画面の色に合わせている
   static void markRgb(MarkColor c, int& r, int& g, int& b) {
     switch (c) {
-      case MarkColor::Cyan:    r = 0x14; g = 0xE6; b = 0xE8; return;
-      case MarkColor::Green:   r = 0x36; g = 0xD3; b = 0x5A; return;
-      case MarkColor::Yellow:  r = 0xF5; g = 0xC6; b = 0x2B; return;
-      case MarkColor::Magenta: r = 0xE8; g = 0x53; b = 0xC8; return;
-      case MarkColor::Orange:  r = 0xF7; g = 0x8A; b = 0x2E; return;
+      case MarkColor::Black:     r = 0x1C; g = 0x1C; b = 0x1E; return;
+      case MarkColor::Brown:     r = 0x8B; g = 0x5A; b = 0x2B; return;
+      case MarkColor::Red:       r = 0xFF; g = 0x2D; b = 0x2D; return;
+      case MarkColor::Vermilion: r = 0xFF; g = 0x5E; b = 0x0E; return;
+      case MarkColor::Amber:     r = 0xFF; g = 0x9F; b = 0x0A; return;
+      case MarkColor::Green:     r = 0x00; g = 0xC4; b = 0x5A; return;
+      case MarkColor::Teal:      r = 0x00; g = 0xC8; b = 0xA8; return;
+      case MarkColor::Blue:      r = 0x0A; g = 0x84; b = 0xFF; return;
+      case MarkColor::Purple:    r = 0x8B; g = 0x5C; b = 0xF6; return;
+      case MarkColor::Pink:      r = 0xFF; g = 0x2D; b = 0x9A; return;
+      case MarkColor::Gray:      r = 0x8E; g = 0x8E; b = 0x93; return;
     }
     r = g = b = 0xFF;
   }
 
-  // 体の色: 形が変わるのと一緒に色も混ざって変わる。上は白っぽく、下は濃く (つやのある塊に見せる)
-  uint16_t bodyColor(float t) const {
-    t = clamp01(t);
+  // 体の色: 実物はフラットな単色。色が変わるときだけ滑らかに混ぜる
+  uint16_t bodyColor(float) const {
     int ra, ga, ba, rb, gb, bb;
-    markRgb(markAt(_shapeFrom).color, ra, ga, ba);
-    markRgb(markAt(_shapeTo).color, rb, gb, bb);
-    const float m = smoothstep(_morph);
-    const float cr = ra + (rb - ra) * m, cg = ga + (gb - ga) * m, cb = ba + (bb - ba) * m;
-    // 上端は白に寄せ、下端は暗く
-    const float hi = BOT_BODY_HIGHLIGHT, lo = BOT_BODY_SHADE;
-    const float k = hi + (lo - hi) * t;   // 1.0 で白寄り、0.0 で暗い
-    float r, g, b;
-    if (k >= 0.5f) {   // 白へ寄せる
-      const float w = (k - 0.5f) * 2.0f;
-      r = cr + (255.0f - cr) * w; g = cg + (255.0f - cg) * w; b = cb + (255.0f - cb) * w;
-    } else {           // 黒へ寄せる
-      const float w = 1.0f - k * 2.0f;
-      r = cr * (1.0f - w); g = cg * (1.0f - w); b = cb * (1.0f - w);
-    }
-    return (uint16_t)((((int)r & 0xF8) << 8) | (((int)g & 0xFC) << 3) | ((int)b >> 3));
+    markRgb(colorAt(_colorFrom), ra, ga, ba);
+    markRgb(colorAt(_colorTo), rb, gb, bb);
+    const float m = smoothstep(_colorMorph);
+    const int r = (int)(ra + (rb - ra) * m);
+    const int g = (int)(ga + (gb - ga) * m);
+    const int b = (int)(ba + (bb - ba) * m);
+    return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
   }
 
-  // 目 1 つ。傾いた黒い楕円 (シアーで傾ける)。side は -1 = 左目、+1 = 右目
-  void drawEye(M5Canvas& sp, float ex, float ey, float s, int side) const {
-    float w = BOT_EYE_W * s, h = BOT_EYE_H * s;
-    float shear = BOT_EYE_TILT * side;   // 外側に向かって少し傾く
-
-    switch (_mood) {
-      case Mood::Startled: h *= 1.25f; w *= 1.08f; break;
-      case Mood::Surprised: h *= 1.15f; break;
-      case Mood::Drowsy:   h *= 0.55f; break;
-      case Mood::Bite:     h *= 0.7f;  break;
-      default: break;
+  // 目の形。長さ (高さ) は基本そのままで、幅と「傾き」で表情を作る。
+  // 傾き: + = タレ目 (外側が下がる、既定)、- = ツリ目 (外側が上がる)
+  struct EyePose { float w, h, tilt; };
+  EyePose poseFor(Mood mood) const {
+    switch (mood) {
+      case Mood::Startled:  return {BOT_EYE_W * 1.25f, BOT_EYE_H, BOT_EYE_TILT_UP};        // ツリ目で見開く
+      case Mood::Surprised: return {BOT_EYE_W * 1.15f, BOT_EYE_H, BOT_EYE_TILT_UP * 0.6f};
+      case Mood::Happy:     return {BOT_EYE_W * 1.05f, BOT_EYE_H, BOT_EYE_TILT * 1.6f};    // 強いタレ目
+      case Mood::Music:     return {BOT_EYE_W,         BOT_EYE_H, BOT_EYE_TILT * 1.3f};
+      case Mood::Drowsy:    return {BOT_EYE_W,         BOT_EYE_H, BOT_EYE_TILT * 1.5f};
+      case Mood::Sleep:     return {BOT_EYE_W * 1.05f, BOT_EYE_H * 0.10f, BOT_EYE_TILT};   // 寝ているときだけ線になる
+      case Mood::Bite:      return {BOT_EYE_W * 1.10f, BOT_EYE_H, BOT_EYE_TILT_UP * 1.2f}; // かじるときはツリ目
+      default:              return {BOT_EYE_W,         BOT_EYE_H, BOT_EYE_TILT};           // ふだんはタレ目
     }
-    // まばたき / 眠り: 縦に潰れて線になる
+  }
+
+  // ふだんも時々ふっと表情が変わる (タレ目 <-> ツリ目)。長さは変えない
+  void updateEyePose(Mood mood, float dt, uint32_t now) {
+    EyePose t = poseFor(mood);
+    if (mood == Mood::Awake || mood == Mood::Music) {
+      if ((int32_t)(now - _nextEyeShift) >= 0) {
+        _nextEyeShift = now + BOT_EYE_SHIFT_MIN_MS + random(BOT_EYE_SHIFT_MAX_MS - BOT_EYE_SHIFT_MIN_MS);
+        const int pick = random(100);
+        if (pick < 30)      _idleTilt = BOT_EYE_TILT_UP;          // ツリ目
+        else if (pick < 45) _idleTilt = BOT_EYE_TILT_UP * 0.5f;   // 少しツリ目
+        else if (pick < 65) _idleTilt = BOT_EYE_TILT * 1.7f;      // 強いタレ目
+        else                _idleTilt = BOT_EYE_TILT;             // ふつうのタレ目
+      }
+      t.tilt = _idleTilt;
+    }
+    const float rate = (mood == Mood::Startled || mood == Mood::Surprised) ? 16.0f : 6.0f;
+    _eyeW += (t.w - _eyeW) * clamp01(dt * rate);
+    _eyeH += (t.h - _eyeH) * clamp01(dt * rate);
+    _eyeTilt += (t.tilt - _eyeTilt) * clamp01(dt * rate);
+  }
+
+  // 目 1 つ。実物はカプセル形 (角が丸い縦長)。シアーで少し傾ける。side は -1 = 左目、+1 = 右目
+  void drawEye(M5Canvas& sp, float ex, float ey, float s, int side) const {
+    float w = _eyeW * s, h = _eyeH * s;
+    const float shear = _eyeTilt * side;
+
+    // まばたきと眠りで縦に潰れる。喜び / 音楽では閉じきらない
     float open = clamp01(_open);
-    // 喜び / 音楽でも目は閉じず、少し細めるだけ (笑った弧にはしない)
     if (_mood == Mood::Happy || _mood == Mood::Music) { if (open < 0.62f) open = 0.62f; }
     h *= open;
-    if (h < BOT_EYE_LINE_W * s * 0.5f) {
-      sp.drawWideLine(ex - w * 0.85f, ey, ex + w * 0.85f, ey, BOT_EYE_LINE_W * s, COLOR_BOT_EYE);
-      return;
-    }
-    // 傾いた楕円 = 走査線ごとに横位置をずらした楕円
-    const int hy = clampi((int)h, 1, 120);
+
+    const float minH = BOT_EYE_LINE_W * s * 0.5f;
+    if (h < minH) h = minH;   // 完全に消さず、細い線として残す
+
+    // カプセル形: 中央の四角 + 上下の半円。走査線ごとに横位置をずらして傾ける
+    const int hy = clampi((int)h, 1, 140);
+    const float r = w < h ? w : h;            // 角の丸み (幅か高さの小さい方)
+    const float straight = h - r;             // まっすぐな部分の半分の長さ
     for (int dy = -hy; dy <= hy; ++dy) {
-      const float k = 1.0f - (float)(dy * dy) / (float)(hy * hy + 1);
-      if (k <= 0) continue;
-      const float half = w * sqrtf(k);
-      const float xc = ex + shear * dy * s;
-      sp.drawFastHLine((int)(xc - half), (int)(ey + dy), (int)(half * 2) + 1, COLOR_BOT_EYE);
+      const float fy = (float)dy;
+      float half;
+      if (fabsf(fy) <= straight) {
+        half = w;
+      } else {
+        const float t = (fabsf(fy) - straight) / (r > 0.01f ? r : 1.0f);
+        const float k = 1.0f - t * t;
+        half = w * (k > 0 ? sqrtf(k) : 0.0f);
+      }
+      if (half < 0.5f) continue;
+      const float xc = ex + shear * fy;
+      sp.drawFastHLine((int)(xc - half), (int)(ey + fy), (int)(half * 2) + 1, COLOR_BOT_EYE);
     }
   }
 
@@ -307,9 +363,16 @@ private:
   float _lookX = 0.0f, _lookY = 0.0f;
   float _open = 1.0f, _mouthVisible = 0.0f, _mouthOpen = 0.0f;
   float _dent = 0.0f, _dentAngle = 0.0f, _dentDist = 0.0f;
+  float _eyeW = BOT_EYE_W, _eyeH = BOT_EYE_H;
+  float _eyeTilt = BOT_EYE_TILT;
+  float _idleTilt = BOT_EYE_TILT;
+  uint32_t _nextEyeShift = 0;
   float _targetX = 0.0f, _targetY = 0.0f;
   uint32_t _nextLook = 0;
-  uint8_t _shapeFrom = 0, _shapeTo = 0;
+  uint8_t _shapeFrom = DEFAULT_SHAPE_INDEX, _shapeTo = DEFAULT_SHAPE_INDEX;
+  uint8_t _colorFrom = DEFAULT_COLOR_INDEX, _colorTo = DEFAULT_COLOR_INDEX;
+  float _colorMorph = 1.0f;
+  uint32_t _nextColor = 0;
   float _morph = 1.0f;
   uint32_t _nextShape = 0;
 };

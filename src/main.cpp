@@ -155,10 +155,11 @@ static AncsNotification lastNote{};
 static uint32_t noteShownUntil = 0;
 static bool notePending = false;
 static bool micMuted = false;          // 端末側で覚えている状態 (PC からは返ってこない)
-static float leverKnob = 0.0f;         // 表示上のつまみ位置 0 = 上 (MIC) .. 1 = 下 (MUTE)
-static bool leverDragging = false;
-static float leverDragPos = 0.0f, leverDragStart = 0.0f;
-static bool leverCancel = false;       // スワイプでモード切替したときレバー操作を無効にする
+static float mutePress = 0.0f;         // ボタンの押し込み表現 (0..1)
+static bool muteHeld = false, muteArmed = false;
+// スワイプ検出 (顔ローカル座標)
+static float swipeStartX = 0, swipeStartY = 0, swipeDX = 0, swipeDY = 0;
+static bool swipeDone = false, swipeSuppressTap = false;
 // 会議モード
 static bool meetingMode = false;
 static uint32_t meetingToggleFlashUntil = 0;
@@ -168,11 +169,9 @@ static bool passMode = false;
 static uint32_t passHoldStart = 0;     // QR 長押し (削除) の開始時刻
 static bool passHoldDone = false;
 
-// レバーの形 (顔ローカル座標)。通常 = 顔の右に縦、会議モード = 中央に横
-struct LeverGeom { float x, y; bool vertical; float halfLen, knobR, zoneHalfW; };
-static LeverGeom leverGeom() {
-  if (meetingMode) return {0.0f, 0.0f, false, (float)MEET_LEVER_HALF_LEN, (float)MEET_LEVER_KNOB_R, (float)MEET_LEVER_ZONE_HALF_W};
-  return {(float)LEVER_X, 0.0f, true, (float)LEVER_HALF_LEN, (float)LEVER_KNOB_R, (float)LEVER_ZONE_HALF_W};
+// ミュートボタン (顔ローカル座標の中心と半径)。会議モードの真ん中に置く
+static bool onMuteButton(float lx, float ly) {
+  return (lx * lx + ly * ly) < (float)(MUTE_BTN_R + MUTE_BTN_TOUCH_MARGIN) * (MUTE_BTN_R + MUTE_BTN_TOUCH_MARGIN);
 }
 
 static constexpr gpio_num_t WAKE_BUTTON_1 = GPIO_NUM_1;
@@ -224,7 +223,7 @@ static void setMeetingMode(bool on, uint32_t now) {
   prefs.putBool("meet", meetingMode);
   if (meetingMode) { sound.end(); M5.Power.setVibration(0); vibUntil = 0; }
   else if (SOUND_ENABLED) sound.begin();
-  leverDragging = false;
+  muteHeld = muteArmed = false;
   statusUntil = now + 1500;
   motion.touch(now);
   printf("[mode] meeting %s\n", meetingMode ? "ON" : "off");
@@ -243,6 +242,13 @@ static void sendHotkey(uint8_t key, uint8_t mods, uint32_t now) {
   kb.tap(key, mods);
   buzz(140, 25, now);
   printf("[hid] key 0x%02X mods 0x%02X\n", key, mods);
+}
+
+// 会議モードでも鳴らすバイブ (自分で押した操作の手応えだけに使う)
+static void buzzForce(uint8_t level, uint32_t ms, uint32_t now) {
+  M5.Power.setVibration(level);
+  vibUntil = now + ms;
+  sound.suppressLoudUntil(now + ms + SOUND_SUPPRESS_AFTER_VIBRATION_MS);
 }
 
 static void applyBrightness() {
@@ -349,45 +355,40 @@ static void drawWrapped(M5Canvas& sp, const char* text, int cx, int y, int maxW,
   }
 }
 
-// ミュートレバー (フェーダー風)。顔スプライトに描くので顔と一緒に回る。上 = MIC ON, 下 = MUTE
-static void drawLever() {
+static bool targetChipVisible();   // 送り先チップを出すか (定義は後方)
+
+// ミュートボタン: 押すだけの丸いボタン。赤 = マイクが入っている、緑 = ミュート
+static void drawMuteButton() {
   M5Canvas& sp = face.sprite();
   const float c = sp.width() / 2.0f;
-  const LeverGeom g = leverGeom();
-  const float cx = c + g.x, cy = c + g.y;
-  const float target = leverDragging ? leverDragPos : (micMuted ? 1.0f : 0.0f);
-  leverKnob += (target - leverKnob) * (leverDragging ? 1.0f : 0.25f);
   const uint16_t col = micMuted ? COLOR_LEVER_MUTE : COLOR_LEVER_ON;
-  const int kr = (int)g.knobR;
-  const int tw = kr / 3;   // トラックの太さ
+  const int r = (int)(MUTE_BTN_R * (1.0f - 0.06f * mutePress));   // 押すと少し縮む
+  const int cx = (int)c, cy = (int)c;
 
-  // トラックと目盛り
-  if (g.vertical) sp.fillRoundRect((int)(cx - tw / 2), (int)(cy - g.halfLen - tw / 2), tw, (int)(2 * g.halfLen + tw), tw / 2, COLOR_LEVER_TRACK);
-  else            sp.fillRoundRect((int)(cx - g.halfLen - tw / 2), (int)(cy - tw / 2), (int)(2 * g.halfLen + tw), tw, tw / 2, COLOR_LEVER_TRACK);
-  for (int k = 0; k <= 4; ++k) {
-    const float p = -g.halfLen + 2 * g.halfLen * k / 4;
-    if (g.vertical) { sp.drawFastHLine((int)(cx - kr + 5), (int)(cy + p), 8, COLOR_UI); sp.drawFastHLine((int)(cx + kr - 13), (int)(cy + p), 8, COLOR_UI); }
-    else            { sp.drawFastVLine((int)(cx + p), (int)(cy - kr + 5), 8, COLOR_UI); sp.drawFastVLine((int)(cx + p), (int)(cy + kr - 13), 8, COLOR_UI); }
+  sp.fillCircle(cx, cy, r + 7, 0x2124);          // 影
+  sp.fillCircle(cx, cy, r, col);
+  sp.fillCircle(cx, cy, r - 8, 0x0000);          // 内側の黒
+  sp.fillCircle(cx, cy, r - 15, col);
+
+  // ---- マイクの絵 (ボタンの中に収める) ----
+  const float k = r / 108.0f;                    // ボタンの大きさに合わせる
+  const uint16_t ink = 0x0000;
+  const int bodyW = (int)(20 * k), bodyH = (int)(30 * k);
+  const int bodyY = cy - (int)(18 * k);          // マイク本体の中心
+  sp.fillRoundRect(cx - bodyW, bodyY - bodyH, bodyW * 2, bodyH * 2, bodyW, ink);
+  // 下の受け (U 字)。角度は 3 時方向が 0 度、時計回り
+  const int arcR = (int)(34 * k);
+  sp.fillArc(cx, bodyY + (int)(4 * k), arcR - (int)(6 * k), arcR, 25, 155, ink);
+  // スタンド
+  sp.fillRect(cx - (int)(3 * k), bodyY + arcR, (int)(6 * k), (int)(16 * k), ink);
+  sp.fillRect(cx - (int)(16 * k), bodyY + arcR + (int)(14 * k), (int)(32 * k), (int)(6 * k), ink);
+
+  // ミュート中は斜線を重ねる
+  if (micMuted) {
+    const float d = 46 * k;
+    sp.drawWideLine(cx - d, cy - d, cx + d, cy + d, 14.0f * k, col);
+    sp.drawWideLine(cx - d, cy - d, cx + d, cy + d, 7.0f * k, ink);
   }
-  // つまみ
-  const float p = -g.halfLen + 2 * g.halfLen * leverKnob;
-  const float kx = g.vertical ? cx : cx + p, ky = g.vertical ? cy + p : cy;
-  sp.fillCircle((int)kx, (int)ky, kr, col);
-  sp.fillCircle((int)kx, (int)ky, kr - 6, 0x0000);
-  sp.fillCircle((int)kx, (int)ky, kr - 10, col);
-  if (g.vertical) sp.drawFastHLine((int)(kx - kr + 4), (int)ky, 2 * kr - 8, 0x0000);
-  else            sp.drawFastVLine((int)kx, (int)(ky - kr + 4), 2 * kr - 8, 0x0000);
-
-  // ラベル
-  sp.setFont(&fonts::Font2);
-  sp.setTextSize(1);
-  sp.setTextDatum(middle_center);
-  sp.setTextColor(micMuted ? COLOR_UI : COLOR_LEVER_ON);
-  if (g.vertical) sp.drawString("MIC", (int)cx, (int)(cy - g.halfLen - 24));
-  else            sp.drawString("MIC", (int)(cx - g.halfLen - 34), (int)cy);
-  sp.setTextColor(micMuted ? COLOR_LEVER_MUTE : COLOR_UI);
-  if (g.vertical) sp.drawString("MUTE", (int)cx, (int)(cy + g.halfLen + 24));
-  else            sp.drawString("MUTE", (int)(cx + g.halfLen + 38), (int)cy);
 }
 
 // 会議モードの画面: 閉じた目 (静か) + 大きな横型ミュートトグル + 状態
@@ -396,8 +397,10 @@ static void drawMeeting(uint32_t now) {
   const int c = sp.width() / 2;
   sp.fillScreen(COLOR_TRANSPARENT);
 
-  // 見た目に合わせた小さな飾り。まっくろくろすけは閉じた目 (‿ ‿)、Bot は小さなマーク
-  if (styleIndex == STYLE_MAKKURO) {
+  // 見た目に合わせた小さな飾り (送り先チップが出るときは場所を譲る)
+  if (targetChipVisible()) {
+    // チップが上に出るので飾りは描かない
+  } else if (styleIndex == STYLE_MAKKURO) {
     const uint16_t eye = micMuted ? 0x8410 : COLOR_EYE_WHITE;   // ミュート中は少し寝ぼけた薄い色
     for (int i = -1; i <= 1; i += 2) sp.fillArc(c + i * 62, c - 118, 26, 33, 20, 160, eye);
   } else {
@@ -406,28 +409,23 @@ static void drawMeeting(uint32_t now) {
     for (int i = -1; i <= 1; i += 2) sp.fillEllipse(c + i * 13, c - 120, 5, 10, COLOR_BOT_EYE);
   }
 
-  sp.setFont(&fonts::Font2);
   sp.setTextSize(1);
   sp.setTextDatum(middle_center);
-  sp.setTextColor(COLOR_UI);
-  sp.drawString("MEETING  (swipe up to exit)", c, c - 62);
 
-  drawLever();
+  drawMuteButton();
 
-  // 状態 (大きく)
-  const bool flash = (int32_t)(now - meetingToggleFlashUntil) < 0;
+  // ボタンのすぐ下に状態、いちばん下に接続と電池 (重ならないよう離す)
+  const uint16_t col = micMuted ? COLOR_LEVER_MUTE : COLOR_LEVER_ON;
   sp.setFont(&fonts::Font4);
-  sp.setTextColor(micMuted ? COLOR_LEVER_MUTE : COLOR_LEVER_ON);
-  sp.drawString(micMuted ? "MUTED" : "MIC ON", c, c + 82);
-  if (flash) sp.drawRoundRect(c - 80, c + 64, 160, 36, 8, micMuted ? COLOR_LEVER_MUTE : COLOR_LEVER_ON);
+  sp.setTextColor(col);
+  sp.drawString(micMuted ? "MUTED" : "MIC ON", c, c + MUTE_BTN_R + 22);
 
-  // 接続と電池
   char line[48];
   const int32_t bat = M5.Power.getBatteryLevel();
-  snprintf(line, sizeof(line), "%s   bat %ld%%", kb.connected() ? "PC connected" : "PC not connected", (long)bat);
+  snprintf(line, sizeof(line), "%s  bat %ld%%", kb.connected() ? "PC ok" : "PC --", (long)bat);
   sp.setFont(&fonts::Font2);
   sp.setTextColor(kb.connected() ? COLOR_UI : COLOR_LEVER_MUTE);
-  sp.drawString(line, c, c + 130);
+  sp.drawString(line, c, c + MUTE_BTN_R + 52);
 }
 
 // 通知バナー: 上にアプリ名、中央にタイトル、下に本文の先頭
@@ -478,6 +476,31 @@ static void drawPasskey(uint32_t key) {
   sp.setTextSize(1);
 }
 
+// キーの送り先チップ。PC が 2 台以上繋がっているときだけ画面上部に出す。タップで切替
+static bool targetChipVisible() { return HID_ENABLED && kb.keyPeerCount() >= 2; }
+
+static void drawTargetChip() {
+  M5Canvas& sp = face.sprite();
+  const int c = sp.width() / 2;
+  const int y = c - TARGET_CHIP_Y;
+  sp.setFont(&fonts::Font2);
+  sp.setTextSize(1);
+  sp.setTextDatum(middle_center);
+  const char* name = kb.keyTargetName();
+  int w = sp.textWidth(name) + 34;
+  if (w < 92) w = 92;
+  if (w > 260) w = 260;
+  sp.fillRoundRect(c - w / 2, y - 15, w, 30, 15, 0x0000);
+  sp.drawRoundRect(c - w / 2, y - 15, w, 30, 15, COLOR_UI_ACCENT);
+  sp.setTextColor(COLOR_UI_ACCENT);
+  sp.drawString(name, c, y);
+  // 何台目かの点
+  for (int i = 0; i < kb.keyPeerCount(); ++i) {
+    sp.fillCircle(c - (kb.keyPeerCount() - 1) * 5 + i * 10, y + 22, 3,
+                  i == kb.keyTargetIndex() ? COLOR_UI_ACCENT : 0x4208);
+  }
+}
+
 static void drawStatus(uint32_t now) {
   M5Canvas& sp = face.sprite();
   const int w = sp.width();
@@ -511,6 +534,8 @@ static void drawStatus(uint32_t now) {
   snprintf(line, sizeof(line), "snd %4.0fdB fl %4.0f sfm %.2f act %.2f%s", sound.levelDb(), sound.floorDb(),
            sound.flatness(), sound.activeRatio(), sound.isMusic() ? " MUSIC" : "");
   sp.drawString(line, x, y); y += 16;
+  snprintf(line, sizeof(line), "keys -> %s (%d pc)", kb.keyTargetName(), kb.keyPeerCount());
+  sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "ancs %s  peers %d", ancs.connected() ? "on" : "off", kb.peerCount());
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "ble %s  mic %s%s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
@@ -543,8 +568,9 @@ static void render(uint32_t now) {
     drawMeeting(now);
   } else {
     face.draw(styleIndex);
-    if (leverVisible()) drawLever();
+    if (leverVisible()) drawMuteButton();
   }
+  if (targetChipVisible()) drawTargetChip();
   if ((int32_t)(now - noteShownUntil) < 0) drawNotification(now);
   else if ((int32_t)(now - statusUntil) < 0) drawStatus(now);
   if (HID_ENABLED) { const uint32_t pk = kb.pairingPasskey(); if (pk) drawPasskey(pk); }
@@ -728,6 +754,12 @@ void loop() {
     }
   }
 
+  // ---- キーの送り先 (PC が 2 台繋がっているときだけ選べる) ----
+  {
+    static uint32_t lastPeerScan = 0;
+    if (now - lastPeerScan > 1000) { lastPeerScan = now; kb.updatePeers(); }
+  }
+
   // ---- BLE 接続状態 ----
   if (kb.takeConnectionChange()) {
     statusUntil = now + STATUS_OVERLAY_MS;
@@ -781,39 +813,63 @@ void loop() {
     const float dx = t.x - (screenW / 2.0f + DISPLAY_OFFSET_X), dy = t.y - (screenH / 2.0f + DISPLAY_OFFSET_Y);
     const float lx = dx * cosf(a) - dy * sinf(a);
     const float ly = dx * sinf(a) + dy * cosf(a);
-    const LeverGeom g = leverGeom();
-    const bool onLever = leverVisible() &&
-                         (g.vertical ? (fabsf(lx - g.x) < g.zoneHalfW && fabsf(ly - g.y) < g.halfLen + g.knobR)
-                                     : (fabsf(ly - g.y) < g.zoneHalfW && fabsf(lx - g.x) < g.halfLen + g.knobR));
-    if (t.wasPressed()) printf("[touch] down x=%d y=%d local=(%.0f,%.0f)\n", t.x, t.y, lx, ly);
-    if (t.wasReleased()) printf("[touch] up   dist=(%d,%d) flicked=%d clicked=%d dragged=%d\n", t.distanceX(), t.distanceY(),
-                                (int)t.wasFlicked(), (int)t.wasClicked(), (int)t.wasDragged());
+    const bool onMute = leverVisible() && onMuteButton(lx, ly);
+    const bool onChip = targetChipVisible() && fabsf(lx) < 130 && fabsf(ly + TARGET_CHIP_Y) < 26;
+    // ---- スワイプの検出は自前で行う ----
+    // タッチ IC (CST816S) の distanceX/Y と wasFlicked は 0 のままのことがあり当てにならないので、
+    // 押した位置と現在位置の差を顔ローカル座標で自分で追う。
+    if (t.wasPressed()) {
+      swipeStartX = lx; swipeStartY = ly;
+      swipeDX = swipeDY = 0.0f;
+      swipeDone = false;
+    }
+    if (t.isPressed()) {
+      const float dxl = lx - swipeStartX, dyl = ly - swipeStartY;
+      if (fabsf(dxl) > fabsf(swipeDX)) swipeDX = dxl;   // いちばん大きく動いた量を覚える
+      if (fabsf(dyl) > fabsf(swipeDY)) swipeDY = dyl;
+    }
+    const bool swiped = !swipeDone && t.isPressed() &&
+                        (fabsf(swipeDX) > SWIPE_MIN_PX || fabsf(swipeDY) > SWIPE_MIN_PX);
+    if (t.wasReleased()) {
+      swipeDone = false;
+    }
 
-    // ---- 縦スワイプでモード切替 (下 = 会議モードへ, 上 = 通常へ)。通常モードのレバー上では無効 ----
-    if (t.wasFlicked() && !(g.vertical && (onLever || leverDragging))) {
-      const float sdx = (float)t.distanceX(), sdy = (float)t.distanceY();
-      const float fly = sdx * sinf(a) + sdy * cosf(a);   // 顔ローカルの縦方向の移動量
-      const float flx = sdx * cosf(a) - sdy * sinf(a);
-      if (passMode) {
-        // チケットモード: 左右で戻る、上下で次 / 前のチケット
-        if (fabsf(flx) > SWIPE_MIN_PX && fabsf(flx) > 1.5f * fabsf(fly)) { passMode = false; pass.stopReceive(); buzz(120, 40, now); puts("[mode] pass off"); }
-        else if (fabsf(fly) > SWIPE_MIN_PX && fabsf(fly) > 1.5f * fabsf(flx)) { if (fly > 0) pass.next(); else pass.prev(); }
+    // ---- 縦スワイプでモード切替 (下 = 会議モードへ, 上 = 通常へ) ----
+    if (swiped) {
+      swipeDone = true;                 // 1 回のタッチで 1 回だけ
+      swipeSuppressTap = true;          // このタッチはタップとして扱わない
+      const float fly = swipeDY, flx = swipeDX;
+      const bool vertical = fabsf(fly) > SWIPE_MIN_PX && fabsf(fly) > 1.5f * fabsf(flx);
+      const bool horizontal = fabsf(flx) > SWIPE_MIN_PX && fabsf(flx) > 1.5f * fabsf(fly);
+
+      if (vertical && fly < 0) {
+        // ---- 上スワイプ: どのモードからでも通常モードへ戻る ----
+        muteArmed = false;
+        if (passMode) { passMode = false; pass.stopReceive(); passHoldStart = 0; buzz(120, 40, now); puts("[mode] pass off"); }
+        else if (meetingMode) setMeetingMode(false, now);
+        else swipeDone = false;   // すでに通常モード
+      } else if (passMode) {
+        // チケットモード: 左右で次 / 前のチケット
+        if (horizontal) { if (flx < 0) pass.next(); else pass.prev(); }
+        else swipeDone = false;
         passHoldStart = 0;
-      } else if (fabsf(fly) > SWIPE_MIN_PX && fabsf(fly) > 1.5f * fabsf(flx)) {
-        leverCancel = true;   // このタッチをレバー操作として扱わない
-        setMeetingMode(fly > 0, now);
-      } else if (PASS_ENABLED && !meetingMode && fabsf(flx) > SWIPE_MIN_PX && fabsf(flx) > 1.5f * fabsf(fly)) {
+      } else if (vertical) {
+        muteArmed = false;
+        setMeetingMode(true, now);   // 下スワイプ: 会議モードへ
+      } else if (PASS_ENABLED && !meetingMode && horizontal) {
         passMode = true;      // 左右スワイプでチケットモードへ
         passHoldStart = 0;
         buzz(120, 40, now);
         statusUntil = 0;
         puts("[mode] pass ON");
+      } else {
+        swipeDone = false;    // 斜めなど、どれにも当てはまらない動きは無視して続ける
       }
     }
 
     if (passMode) {
       // タップ: 受信の開始 / 停止。長押し: 表示中のチケットを削除
-      if (t.wasClicked()) {
+      if (t.wasClicked() && !swipeSuppressTap) {
         if (pass.receiving()) pass.stopReceive();
         else pass.startReceive(now);
         buzz(100, 30, now);
@@ -834,17 +890,26 @@ void loop() {
       }
     }
 
-    if (t.wasClicked() && !onLever && !leverDragging && !meetingMode && !passMode) in.tapped = true;
+    if (t.wasClicked() && swipeSuppressTap) {
+      // スワイプだったのでタップ扱いしない
+    } else if (t.wasClicked() && onChip) {
+      if (kb.cycleKeyTarget()) {
+        buzz(120, 40, now);
+        statusUntil = now + STATUS_OVERLAY_MS;
+        printf("[hid] key target -> %s\n", kb.keyTargetName());
+      }
+    } else if (t.wasClicked() && !onMute && !meetingMode && !passMode) in.tapped = true;
     if (t.isPressed() && !passMode) {
       pressed = true;
       motion.touch(now);
       sound.suppressLoudUntil(now + SOUND_SUPPRESS_AFTER_TOUCH_MS);   // タッチ音で驚かない
-      if (onLever || leverDragging) {
-        // ---- ミュートレバーをドラッグ中 (顔は反応しない) ----
-        const float along = g.vertical ? (ly - g.y) : (lx - g.x);
-        const float pos = (along + g.halfLen) / (2.0f * g.halfLen);
-        leverDragPos = pos < 0 ? 0 : (pos > 1 ? 1 : pos);
-        if (!leverDragging) { leverDragging = true; leverDragStart = leverDragPos; leverCancel = false; }
+      if (onMute) {
+        // ---- ミュートボタンを押している ----
+        if (!muteHeld) {
+          muteHeld = true; muteArmed = true;
+          buzzForce(MUTE_BTN_HAPTIC_LEVEL, MUTE_BTN_HAPTIC_MS, now);   // 押した手応え
+        }
+        if (swipeSuppressTap) muteArmed = false;
         mouthTouchStart = 0;
       } else if (meetingMode) {
         mouthTouchStart = 0;   // 会議モードでは顔は反応しない
@@ -865,20 +930,20 @@ void loop() {
     }
   }
   if (!in.touching) mouthTouchStart = 0;
-  // ---- レバーを離した: 少ししか動かしていなければトグル、動かしていれば位置で決める ----
-  if (leverDragging && !pressed) {
-    leverDragging = false;
-    const bool moved = fabsf(leverDragPos - leverDragStart) > 0.15f;
-    const bool newMuted = moved ? (leverDragPos > 0.5f) : !micMuted;
-    if (!leverCancel && newMuted != micMuted) {
-      micMuted = newMuted;
+  if (!pressed) swipeSuppressTap = false;
+  // ---- ミュートボタンを離した: その場で切り替える ----
+  if (muteHeld && !pressed) {
+    muteHeld = false;
+    if (muteArmed) {
+      micMuted = !micMuted;
       sendHotkey(HID_MUTE_KEY, HID_MUTE_MODS, now);
       buzz(200, micMuted ? 120 : 40, now);   // ミュートは長め、解除は短め (会議モードでは鳴らない)
       meetingToggleFlashUntil = now + 350;   // 会議モードは視覚で知らせる
       printf("[hid] mic %s\n", micMuted ? "MUTED" : "on");
     }
-    leverCancel = false;
+    muteArmed = false;
   }
+  mutePress += ((muteHeld ? 1.0f : 0.0f) - mutePress) * (dt * 18.0f > 1.0f ? 1.0f : dt * 18.0f);
   if (in.tapped) motion.touch(now);
   in.idleMs = motion.idleMs(now);
   in.moving = in.idleMs < 300;

@@ -68,6 +68,47 @@ public:
   bool started() const { return _started; }
   bool connected() const { return _cb.connected; }
   int peerCount() const { return _server ? _server->getConnectedCount() : 0; }
+
+  // ---- キーを送る相手 (PC) の一覧と選択 ----
+  // iPhone (ANCS を持つ相手) は除く。名前は GAP から読む。
+  struct KeyPeer { uint16_t handle; char name[20]; };
+
+  int keyPeerCount() const { return _peerCount; }
+  const KeyPeer& keyPeer(int i) const { return _peers[i < _peerCount ? i : 0]; }
+  int keyTargetIndex() const { return _target < _peerCount ? _target : 0; }
+  const char* keyTargetName() const { return _peerCount ? _peers[keyTargetIndex()].name : "-"; }
+  // 送り先を次の PC へ。切り替えたら true
+  bool cycleKeyTarget() {
+    if (_peerCount < 2) return false;
+    _target = (_target + 1) % _peerCount;
+    return true;
+  }
+
+  // loop から呼ぶ。繋がっている PC の一覧を作り直す
+  void updatePeers() {
+    if (!_server) { _peerCount = 0; return; }
+    const uint16_t phone = _cb.ancs ? _cb.ancs->peerHandle() : 0xFFFF;
+    const uint16_t prev = _peerCount ? _peers[keyTargetIndex()].handle : 0xFFFF;
+    KeyPeer fresh[kMaxPeers];
+    int n = 0;
+    const int total = _server->getConnectedCount();
+    for (int i = 0; i < total && n < kMaxPeers; ++i) {
+      const uint16_t h = _server->getPeerInfo(i).getConnHandle();
+      if (h == phone) continue;                      // iPhone は対象外
+      fresh[n].handle = h;
+      // 既に名前を読んであれば引き継ぐ
+      const char* known = nullptr;
+      for (int k = 0; k < _peerCount; ++k) if (_peers[k].handle == h) known = _peers[k].name;
+      if (known && known[0]) snprintf(fresh[n].name, sizeof(fresh[n].name), "%s", known);
+      else readPeerName(h, fresh[n].name, sizeof(fresh[n].name));
+      n++;
+    }
+    memcpy(_peers, fresh, sizeof(fresh));
+    _peerCount = n;
+    // 直前の送り先が残っていればそれを維持する
+    _target = 0;
+    for (int i = 0; i < _peerCount; ++i) if (_peers[i].handle == prev) _target = i;
+  }
   void attachAncs(AncsClient* a) { _cb.ancs = a; }
   // ペアリング中に画面へ出す数字 (0 = 表示しない)
   uint32_t pairingPasskey() const {
@@ -127,7 +168,24 @@ private:
   void send(const uint8_t* r) {
     if (!_cb.connected || !_input) return;
     _input->setValue(r, 8);
-    _input->notify();
+    // 選んだ PC にだけ送る (iPhone は通知のために繋がっているだけ)
+    if (!HID_SEND_TO_PC_ONLY || _peerCount == 0) { _input->notify(); return; }
+    _input->notify(_peers[keyTargetIndex()].handle);
+  }
+
+  // 相手の機器名 (GAP 0x1800 / 0x2A00) を読む。取れなければアドレスの下 2 桁
+  void readPeerName(uint16_t handle, char* out, size_t cap) {
+    out[0] = 0;
+    NimBLEClient* c = _server->getClient(handle);
+    if (c) {
+      NimBLEAttValue v = c->getValue(NimBLEUUID((uint16_t)0x1800), NimBLEUUID((uint16_t)0x2A00));
+      if (v.length()) snprintf(out, cap, "%s", v.c_str());
+    }
+    if (!out[0]) {
+      const std::string a = _server->getPeerInfoByHandle(handle).getAddress().toString();
+      snprintf(out, cap, "%s", a.size() >= 5 ? a.substr(a.size() - 5).c_str() : a.c_str());
+    }
+    printf("[hid] peer %u name \"%s\"\n", (unsigned)handle, out);
   }
 
   // 標準キーボード (Report ID 1): 修飾 8bit + 予約 8bit + キー 6 バイト
@@ -161,6 +219,9 @@ private:
   NimBLEServer* _server = nullptr;
   NimBLEHIDDevice* _hid = nullptr;
   NimBLECharacteristic* _input = nullptr;
+  static constexpr int kMaxPeers = 3;
+  KeyPeer _peers[kMaxPeers] = {};
+  int _peerCount = 0, _target = 0;
   Cb _cb;
   bool _started = false;
 };

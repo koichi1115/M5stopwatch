@@ -45,9 +45,12 @@ constexpr int BOT_EYE_OFFSET_X = 46;       // 目の横位置 (体の中心か�
 constexpr int BOT_EYE_OFFSET_Y = -6;       // 目の縦位置 (+ で下)
 constexpr float BOT_EYE_W = 17.0f;         // 目の半幅
 constexpr float BOT_EYE_H = 34.0f;         // 目の半高 (細長い楕円)
-constexpr float BOT_EYE_TILT = 0.16f;      // 目の傾き (外側へ倒す量。0 で真っ直ぐ)
+constexpr float BOT_EYE_TILT = 0.17f;      // 既定の傾き = タレ目 (外側が下がる)。0 で真っ直ぐ
+constexpr float BOT_EYE_TILT_UP = -0.22f;  // ツリ目 (外側が上がる)
 constexpr float BOT_EYE_LINE_W = 7.0f;     // 閉じた目 / 笑った目の線の太さ
 constexpr float BOT_EYE_SHIFT_PX = 12.0f;  // 目が動く量 (黒目ではなく目そのものが動く)
+constexpr uint32_t BOT_EYE_SHIFT_MIN_MS = 1600;  // タレ目 / ツリ目 が切り替わる間隔
+constexpr uint32_t BOT_EYE_SHIFT_MAX_MS = 5000;
 constexpr float BOT_LEAN_PX = 14.0f;       // 見ている方向へ体ごと傾く量
 constexpr int BOT_MOUTH_OFFSET_Y = 62;     // かじる口の位置 (体の中心から下へ)
 constexpr float BOT_MOUTH_W = 52.0f;       // 口の半幅
@@ -55,6 +58,9 @@ constexpr float BOT_MOUTH_H = 44.0f;       // 口の半高 (全開時)
 constexpr uint32_t BOT_SHAPE_HOLD_MIN_MS = 2600;  // 次の形に変わるまでの時間
 constexpr uint32_t BOT_SHAPE_HOLD_MAX_MS = 6000;
 constexpr float BOT_MORPH_SEC = 0.9f;      // 形が変わりきるまでの時間 [秒]
+constexpr uint32_t BOT_COLOR_HOLD_MIN_MS = 6000;   // 色が変わるまでの時間 (形とは別のタイミング)
+constexpr uint32_t BOT_COLOR_HOLD_MAX_MS = 15000;
+constexpr float BOT_COLOR_MORPH_SEC = 1.4f;
 constexpr uint32_t BOT_LOOK_HOLD_MIN_MS = 1800;   // 向きを変えるまでの時間 (ゆっくり首を振る)
 constexpr uint32_t BOT_LOOK_HOLD_MAX_MS = 5200;
 constexpr float BOT_DENT_DEPTH = 0.34f;    // 指で押したときの凹みの深さ (半径に対する比率)
@@ -62,7 +68,7 @@ constexpr float BOT_DENT_WIDTH = 0.62f;    // 凹みの広がり [rad] (小さ�
 constexpr float BOT_TOUCH_TO_BODY = 1.35f; // タッチ座標 (顔ローカル正規化) → 体の半径 の換算
 constexpr float BOT_BODY_HIGHLIGHT = 0.86f; // 体の上端の明るさ (1.0 = 白)
 constexpr float BOT_BODY_SHADE = 0.30f;     // 体の下端の明るさ (0.0 = 黒)
-constexpr uint16_t COLOR_BOT_EYE = 0x18E3;    // 目 (ほぼ黒)
+constexpr uint16_t COLOR_BOT_EYE = 0xFFFF;    // 目 (実物は色付きの体に白い目)
 constexpr uint16_t COLOR_BOT_MOUTH = 0x2124;  // かじる口
 constexpr uint16_t COLOR_BOT_THROAT = 0x0000;
 constexpr uint16_t COLOR_UI_BRIGHT = 0xFFFF;
@@ -197,6 +203,10 @@ constexpr uint32_t HID_PAIRING_PASSKEY = 123456;
 
 // ---- iPhone の通知 (ANCS) ----
 constexpr bool ANCS_ENABLED = true;
+// キーボードのキーを送る相手を PC だけに限る (iPhone に Alt+Tab などが飛ばないように)
+constexpr bool HID_SEND_TO_PC_ONLY = true;
+// キーの送り先チップ (PC が 2 台以上繋がっているときだけ表示)。顔の中心から上へ [px]
+constexpr int TARGET_CHIP_Y = 132;
 constexpr uint32_t ANCS_DISCOVER_RETRY_MS = 2000;   // ANCS を探し直す間隔
 constexpr int ANCS_DISCOVER_TRIES = 8;              // これだけ試して見つからなければ諦める (PC 側の接続)
 constexpr bool ANCS_IGNORE_SILENT = true;           // サイレント通知は無視
@@ -221,22 +231,20 @@ constexpr uint8_t HID_BTN_A_KEY = 0x2B;          // Tab
 constexpr uint8_t HID_BTN_B_MODS = 0x00;
 constexpr uint8_t HID_BTN_B_KEY = 0x8B;          // 無変換
 // ミュートレバー (顔ローカル座標, px)。PC と接続中だけ表示
-constexpr int LEVER_X = 158;                     // 顔中心からの横位置 (右)
-constexpr int LEVER_HALF_LEN = 105;              // レバーの半分の長さ (上 = MIC ON, 下 = MUTE)
-constexpr int LEVER_KNOB_R = 22;
-constexpr int LEVER_ZONE_HALF_W = 48;            // タッチ判定の半幅
-constexpr uint16_t COLOR_LEVER_TRACK = 0x4208;
-constexpr uint16_t COLOR_LEVER_ON = 0x07E0;      // 緑
-constexpr uint16_t COLOR_LEVER_MUTE = 0xF800;    // 赤
+// 赤 = マイクが入っている (録音中の赤ランプと同じ意味)、緑 = ミュートで安全
+constexpr uint16_t COLOR_LEVER_ON = 0xF800;      // マイク ON (赤)
+constexpr uint16_t COLOR_LEVER_MUTE = 0x07E0;    // ミュート (緑)
 
 // ============================================================
 // 8. 会議モード (顔を下へスワイプで入る / 上へスワイプで戻る)
 //    バイブ・音への反応・かじり・居眠りを止め、大きな横型ミュートトグルと状態だけを表示
 // ============================================================
-constexpr int SWIPE_MIN_PX = 110;                // モード切替とみなすスワイプの長さ (顔ローカル座標)
-constexpr int MEET_LEVER_HALF_LEN = 105;         // 横型トグルの半分の長さ (左 = MIC ON, 右 = MUTE)
-constexpr int MEET_LEVER_KNOB_R = 40;
-constexpr int MEET_LEVER_ZONE_HALF_W = 95;       // タッチ判定の半分の高さ
+constexpr int SWIPE_MIN_PX = 80;                 // モード切替とみなすスワイプの長さ (顔ローカル座標)
+constexpr int MUTE_BTN_R = 118;                  // ミュートボタンの半径 (会議モードの中央)
+constexpr int MUTE_BTN_TOUCH_MARGIN = 46;        // 押しやすいよう判定を大きく広げる
+// ボタンを押した瞬間の手応え。会議モードでもこれだけは鳴らす (自分で押したときだけなので短く弱く)
+constexpr uint8_t MUTE_BTN_HAPTIC_LEVEL = 180;
+constexpr uint32_t MUTE_BTN_HAPTIC_MS = 40;
 constexpr uint8_t MEET_BRIGHTNESS_PERCENT = 70;  // 通常の明るさに対する割合
 constexpr bool MEET_SILENT = true;               // 会議モード中はバイブを一切鳴らさない (マイクに乗るため)
 
