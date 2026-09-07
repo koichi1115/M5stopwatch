@@ -86,6 +86,14 @@ constexpr int FUR_COUNT = 120;           // 縁の毛の本数
 constexpr int FUR_MIN_LEN = 12;
 constexpr int FUR_MAX_LEN = 30;
 constexpr uint16_t COLOR_BLUSH = 0xFB56; // 照れ (ピンク)
+// 喜んだときの口ときらきら
+constexpr int SMILE_OFFSET_Y = 104;      // 口の位置 (顔中心から下へ)
+constexpr float SMILE_HALF_W = 46.0f;    // 口の半幅
+constexpr float SMILE_DEPTH = 30.0f;     // 口の深さ (大きいほどにっこり)
+constexpr float SPARKLE_X = 150.0f;      // きらきらの位置
+constexpr float SPARKLE_Y = 96.0f;
+constexpr float SPARKLE_R = 22.0f;       // きらきらの大きさ
+constexpr uint16_t COLOR_SPARKLE = 0xFF9E;
 constexpr uint16_t COLOR_ZZZ = 0x9CD3;
 constexpr uint16_t COLOR_UI = 0xC618;
 constexpr uint16_t COLOR_UI_ACCENT = 0x07FF;
@@ -173,14 +181,14 @@ constexpr uint8_t SOUND_ES8311_PGA_GAIN = 4;     // ES8311 のアナログ PGA �
 constexpr float SOUND_FLOOR_RISE_RATE = 0.005f;         // 背景フロアが上がる速さ (静かなとき, 1 ブロックあたり)
 constexpr float SOUND_FLOOR_RISE_RATE_ACTIVE = 0.0002f; // 音がしている間 (長い曲でもフロアが追いつかないよう極小)
 // 急な大きい音
-constexpr float SOUND_LOUD_MIN_DB = -24.0f;          // これより小さい音では驚かない [dBFS]
-constexpr float SOUND_LOUD_ABOVE_FLOOR_DB = 20.0f;   // 背景よりこれだけ大きい
-constexpr float SOUND_LOUD_RISE_DB = 12.0f;          // 直前よりこれだけ急に上がった
-constexpr uint32_t SOUND_LOUD_REFRACTORY_MS = 6000;  // 連続で驚かない時間
+constexpr float SOUND_LOUD_MIN_DB = -12.0f;          // これより小さい音では驚かない [dBFS] (手を強く叩く / 大声くらい)
+constexpr float SOUND_LOUD_ABOVE_FLOOR_DB = 30.0f;   // 背景よりこれだけ大きい
+constexpr float SOUND_LOUD_RISE_DB = 20.0f;          // 直前よりこれだけ急に上がった
+constexpr uint32_t SOUND_LOUD_REFRACTORY_MS = 15000; // 連続で驚かない時間
 // 自分の出す音・衝撃で驚かないための抑止 (マイクは筐体内なのでバイブやタッチ、持ち替えの衝撃を拾う)
 constexpr uint32_t SOUND_SUPPRESS_AFTER_VIBRATION_MS = 400;  // バイブ終了後
 constexpr uint32_t SOUND_SUPPRESS_AFTER_TOUCH_MS = 500;      // タッチ / ボタン操作後
-constexpr uint32_t SOUND_SUPPRESS_MOTION_MS = 400;           // IMU が動きを検知してからこの間の大きい音は「衝撃」とみなして無視
+constexpr uint32_t SOUND_SUPPRESS_MOTION_MS = 900;           // IMU が動きを検知してからこの間の大きい音は「衝撃」とみなして無視
 // 音楽
 constexpr float SOUND_ACTIVE_ABOVE_FLOOR_DB = 6.0f;  // 「音がしている」判定
 constexpr float SOUND_ACTIVE_MIN_DB = -55.0f;
@@ -239,7 +247,11 @@ constexpr uint16_t COLOR_LEVER_MUTE = 0x07E0;    // ミュート (緑)
 // 8. 会議モード (顔を下へスワイプで入る / 上へスワイプで戻る)
 //    バイブ・音への反応・かじり・居眠りを止め、大きな横型ミュートトグルと状態だけを表示
 // ============================================================
-constexpr int SWIPE_MIN_PX = 80;                 // モード切替とみなすスワイプの長さ (顔ローカル座標)
+constexpr int SWIPE_MIN_PX = 80;                 // スワイプとみなす長さ (顔ローカル座標)
+// スワイプでモードに入れるか。false なら顔に触れても会議 / チケットに入らない (モードは BtnB 長押し)。
+// 上スワイプで通常モードに戻る動作は、この設定に関わらず常に効く。
+constexpr bool SWIPE_ENTERS_MODES = false;
+constexpr uint32_t CHORD_CALIBRATE_MS = 2000;    // BtnA + BtnB を押したまま較正になるまで
 constexpr int MUTE_BTN_R = 118;                  // ミュートボタンの半径 (会議モードの中央)
 constexpr int MUTE_BTN_TOUCH_MARGIN = 46;        // 押しやすいよう判定を大きく広げる
 // ボタンを押した瞬間の手応え。会議モードでもこれだけは鳴らす (自分で押したときだけなので短く弱く)
@@ -262,4 +274,15 @@ constexpr int PASS_QR_MAX_PX = 300;              // QR の最大辺 (顔スプ�
 constexpr int PASS_QR_QUIET_PX = 14;             // 白い余白
 constexpr uint32_t PASS_DELETE_HOLD_MS = 1500;   // QR を長押しで削除
 constexpr size_t PASS_MAX_UPLOAD_BYTES = 3UL * 1024 * 1024;   // 受け付ける最大サイズ (PSRAM)
-constexpr bool PASS_DEBUG_RECEIVE_ON_BOOT = false; // 開発用: 起動 3 秒後にチケットモード + 受信待ちにし、5 秒毎にループの生存ログを出す (tools/pass_test.py 用)。普段は false
+constexpr bool PASS_DEBUG_RECEIVE_ON_BOOT = false;   // 開発用: 起動 3 秒後に受信待ちにする (tools/pass_test.py 用)
+
+// ============================================================
+// 10. ギャラリー (円形画面に画像を表示)
+// ============================================================
+constexpr bool GALLERY_ENABLED = true;
+constexpr const char* GALLERY_MOUNT_POINT = "/fs";
+constexpr const char* GALLERY_DIR = "/gallery";
+constexpr int GALLERY_MAX_FILES = 20;
+constexpr size_t GALLERY_MAX_BYTES = 400UL * 1024;   // 1 枚の上限
+constexpr uint8_t GALLERY_BRIGHTNESS = 200;          // 絵を見るので明るめ
+constexpr int GALLERY_SIZE = 466;                    // 画像スプライトの一辺 (画面と同じ)

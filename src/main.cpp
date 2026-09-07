@@ -29,6 +29,7 @@
 #include "sound.h"
 #include "hid.h"
 #include "pass.h"
+#include "gallery.h"
 
 #include <nvs.h>
 #include <esp_system.h>
@@ -165,6 +166,8 @@ static bool meetingMode = false;
 static uint32_t meetingToggleFlashUntil = 0;
 // チケット (QR) モード
 static PassManager pass;
+static Gallery gallery;
+static bool galleryMode = false;      // 円形画面いっぱいに画像を出すモード
 static bool passMode = false;
 static uint32_t passHoldStart = 0;     // QR 長押し (削除) の開始時刻
 static bool passHoldDone = false;
@@ -254,6 +257,7 @@ static void buzzForce(uint8_t level, uint32_t ms, uint32_t now) {
 static void applyBrightness() {
   uint8_t b = BRIGHTNESS_LEVELS[brightnessIndex];
   if (passMode) b = PASS_BRIGHTNESS;            // QR はスキャナ向けに最大
+  else if (galleryMode) b = GALLERY_BRIGHTNESS;
   else if (meetingMode) b = (uint8_t)((uint32_t)b * MEET_BRIGHTNESS_PERCENT / 100);
   else if (face.isSleeping()) b = SLEEP_BRIGHTNESS;
   else if (face.isDrowsy()) b = (uint8_t)((uint32_t)b * DROWSY_BRIGHTNESS_SCALE_PERCENT / 100);
@@ -539,7 +543,8 @@ static void drawStatus(uint32_t now) {
   snprintf(line, sizeof(line), "ancs %s  peers %d", ancs.connected() ? "on" : "off", kb.peerCount());
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "ble %s  mic %s%s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
-           micMuted ? "MUTED" : "on", meetingMode ? "  MEETING" : (passMode ? "  PASS" : ""));
+           micMuted ? "MUTED" : "on",
+           meetingMode ? "  MEETING" : (passMode ? "  PASS" : (galleryMode ? "  GALLERY" : "")));
   sp.drawString(line, x, y);
 
   // 電池アーク (下部, 左から右へ伸びる)
@@ -559,8 +564,52 @@ static void drawStatus(uint32_t now) {
   }
 }
 
+// ギャラリーで受信待ちのとき、接続先と送り先を出す (顔スプライトに描いて一緒に回す)
+static void drawGalleryReceiving(M5Canvas& d) {
+  const int cx = d.width() / 2, y = d.height() / 2 + 92;
+  d.fillRoundRect(cx - 175, y - 34, 350, 116, 12, 0x0000);
+  d.drawRoundRect(cx - 175, y - 34, 350, 116, 12, COLOR_UI_ACCENT);
+  d.setTextDatum(middle_center);
+  d.setTextSize(1);
+  char buf[80];
+  d.setFont(&fonts::lgfxJapanGothic_16);
+  d.setTextColor(COLOR_UI_ACCENT);
+  d.drawString("受信待ち (タップで停止)", cx, y - 14);
+  d.setTextColor(COLOR_UI);
+  if (!pass.listening()) {
+    snprintf(buf, sizeof(buf), "Wi-Fi 接続中... %s", pass.ssidName().c_str());
+    d.drawString(buf, cx, y + 14);
+    return;
+  }
+  if (pass.apMode()) snprintf(buf, sizeof(buf), "AP: %s / %s", pass.ssidName().c_str(), PassManager::apPassword());
+  else               snprintf(buf, sizeof(buf), "Wi-Fi: %s", pass.ssidName().c_str());
+  d.drawString(buf, cx, y + 12);
+  d.setFont(&fonts::Font2);
+  d.setTextColor(COLOR_UI_BRIGHT);
+  snprintf(buf, sizeof(buf), "http://%s/image", pass.ipString().c_str());
+  d.drawString(buf, cx, y + 42);
+  d.setTextColor(COLOR_UI);
+  snprintf(buf, sizeof(buf), "http://%s.local/image", PASS_HOSTNAME);
+  d.drawString(buf, cx, y + 64);
+}
+
 static void render(uint32_t now) {
   const float angle = orient.displayAngle();
+  if (galleryMode) {
+    if (out != &screen) M5.Display.startWrite();
+    out->fillScreen(TFT_BLACK);
+    gallery.pushRotated(out, angle, screenW / 2.0f + DISPLAY_OFFSET_X, screenH / 2.0f + DISPLAY_OFFSET_Y);
+    if (pass.receiving()) {          // 受信待ちの案内も一緒に回す
+      M5Canvas& sp = face.sprite();
+      sp.fillScreen(COLOR_TRANSPARENT);
+      drawGalleryReceiving(sp);
+      sp.pushRotateZoom(out, screenW / 2.0f + DISPLAY_OFFSET_X, screenH / 2.0f + DISPLAY_OFFSET_Y,
+                        angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
+    }
+    if (out == &screen) screen.pushSprite(0, 0);
+    else M5.Display.endWrite();
+    return;
+  }
   if (passMode) {
     face.sprite().fillScreen(COLOR_TRANSPARENT);
     pass.draw(face.sprite(), face.sprite().width() / 2.0f, now);
@@ -585,23 +634,62 @@ static void render(uint32_t now) {
 }
 
 // ------------------------------------------------------------
+// モードを 1 つ進める: 通常 → 会議 → チケット → 通常
+static void cycleMode(uint32_t now) {
+  if (meetingMode) {                 // 会議 → チケット
+    setMeetingMode(false, now);
+    if (PASS_ENABLED) { passMode = true; passHoldStart = 0; statusUntil = 0; puts("[mode] pass ON"); }
+  } else if (passMode) {             // チケット → ギャラリー
+    passMode = false;
+    passHoldStart = 0;
+    puts("[mode] pass off");
+    if (GALLERY_ENABLED) { galleryMode = true; gallery.markDirty(); puts("[mode] gallery ON"); }
+    else pass.stopReceive();
+  } else if (galleryMode) {          // ギャラリー → 通常
+    galleryMode = false;
+    pass.stopReceive();
+    puts("[mode] gallery off");
+  } else {                           // 通常 → 会議
+    setMeetingMode(true, now);
+  }
+  buzz(130, 45, now);
+  motion.touch(now);
+}
+
 static void handleButtons(uint32_t now) {
-  // ---- BtnA + BtnB 同時押し: 見た目を切り替える (まっくろくろすけ ⇄ Bot マーク 5 種) ----
-  static bool styleChordActive = false;
+  // ---- BtnA + BtnB 同時押し ----
+  //   さっと押して離す : 見た目を切り替える (まっくろくろすけ ⇄ Bot)
+  //   押したまま 2 秒   : 今の向きを「正立」として記憶 (較正)
+  static bool chordActive = false, chordHandled = false;
+  static uint32_t chordStart = 0;
   if (M5.BtnA.isPressed() && M5.BtnB.isPressed()) {
-    if (!styleChordActive) {
-      styleChordActive = true;
-      styleIndex = (uint8_t)((styleIndex + 1) % STYLE_COUNT);
-      prefs.putUChar("style", styleIndex);
+    if (!chordActive) { chordActive = true; chordHandled = false; chordStart = now; }
+    else if (!chordHandled && now - chordStart > CHORD_CALIBRATE_MS) {
+      chordHandled = true;
+      if (orient.calibrate()) {
+        saveOrientation();
+        vibrate(200, 80); delay(80); vibrate(200, 80);
+        printf("[cfg] calibrated: offset=%.1f sign=%+d\n", orient.offset(), orient.sign());
+      } else {
+        vibrate(90, 250);
+        puts("[cfg] calibration failed: hold the device upright (screen vertical)");
+      }
       statusUntil = now + STATUS_OVERLAY_MS;
-      buzz(150, 60, now);
-      motion.touch(now);
-      printf("[cfg] style -> %s\n", styleName(styleIndex));
     }
     return;   // 同時押し中は単独の操作を無視する
   }
-  if (styleChordActive) {
-    if (!M5.BtnA.isPressed() && !M5.BtnB.isPressed()) styleChordActive = false;
+  if (chordActive) {
+    if (!M5.BtnA.isPressed() && !M5.BtnB.isPressed()) {
+      chordActive = false;
+      if (!chordHandled) {   // 短い同時押し = 見た目の切替
+        styleIndex = (uint8_t)((styleIndex + 1) % STYLE_COUNT);
+        prefs.putUChar("style", styleIndex);
+        statusUntil = now + STATUS_OVERLAY_MS;
+        buzz(150, 60, now);
+        motion.touch(now);
+        printf("[cfg] style -> %s\n", styleName(styleIndex));
+      }
+    }
     return;
   }
 
@@ -630,15 +718,7 @@ static void handleButtons(uint32_t now) {
     vibrate(150, 60);
     printf("[cfg] autosleep -> %d\n", autoSleepEnabled);
   } else if (M5.BtnB.wasHold()) {
-    if (orient.calibrate()) {
-      saveOrientation();
-      vibrate(200, 80); delay(80); vibrate(200, 80);
-      printf("[cfg] calibrated: offset=%.1f sign=%+d\n", orient.offset(), orient.sign());
-    } else {
-      vibrate(90, 250);
-      puts("[cfg] calibration failed: hold the device upright (screen vertical)");
-    }
-    statusUntil = now + STATUS_OVERLAY_MS;
+    cycleMode(now);   // モードを 1 つ進める
   } else if (M5.BtnB.wasClicked()) {
     sendHotkey(HID_BTN_B_KEY, HID_BTN_B_MODS, now);   // 無変換
   }
@@ -666,6 +746,10 @@ void setup() {
   M5.BtnA.setHoldThresh(BUTTON_HOLD_MS);
   M5.BtnB.setHoldThresh(BUTTON_HOLD_MS);
   loadSettings();
+  if (GALLERY_ENABLED) {
+    gallery.begin();
+    pass.setImageSink([](const uint8_t* d, size_t n, const char* name) { return gallery.save(d, n, name); });
+  }
   if (PASS_ENABLED) {
     pass.begin();
     printf("[boot] passes: %d\n", pass.count());
@@ -846,17 +930,23 @@ void loop() {
         // ---- 上スワイプ: どのモードからでも通常モードへ戻る ----
         muteArmed = false;
         if (passMode) { passMode = false; pass.stopReceive(); passHoldStart = 0; buzz(120, 40, now); puts("[mode] pass off"); }
+        else if (galleryMode) { galleryMode = false; pass.stopReceive(); buzz(120, 40, now); puts("[mode] gallery off"); }
         else if (meetingMode) setMeetingMode(false, now);
         else swipeDone = false;   // すでに通常モード
+      } else if (galleryMode) {
+        // ギャラリー: 左右で次 / 前の画像
+        if (horizontal) { if (flx < 0) gallery.next(); else gallery.prev(); }
+        else swipeDone = false;
+        passHoldStart = 0;
       } else if (passMode) {
         // チケットモード: 左右で次 / 前のチケット
         if (horizontal) { if (flx < 0) pass.next(); else pass.prev(); }
         else swipeDone = false;
         passHoldStart = 0;
-      } else if (vertical) {
+      } else if (SWIPE_ENTERS_MODES && vertical) {
         muteArmed = false;
         setMeetingMode(true, now);   // 下スワイプ: 会議モードへ
-      } else if (PASS_ENABLED && !meetingMode && horizontal) {
+      } else if (SWIPE_ENTERS_MODES && PASS_ENABLED && !meetingMode && horizontal) {
         passMode = true;      // 左右スワイプでチケットモードへ
         passHoldStart = 0;
         buzz(120, 40, now);
@@ -864,6 +954,26 @@ void loop() {
         puts("[mode] pass ON");
       } else {
         swipeDone = false;    // 斜めなど、どれにも当てはまらない動きは無視して続ける
+      }
+    }
+
+    if (galleryMode) {
+      if (t.wasClicked() && !swipeSuppressTap) {
+        if (pass.receiving()) pass.stopReceive(); else pass.startReceive(now);
+        gallery.markDirty();
+        buzz(100, 30, now);
+      }
+      if (t.isPressed()) {
+        pressed = true;
+        motion.touch(now);
+        if (passHoldStart == 0) { passHoldStart = now ? now : 1; passHoldDone = false; }
+        else if (!passHoldDone && now - passHoldStart > PASS_DELETE_HOLD_MS && gallery.count() > 0 && !pass.receiving()) {
+          passHoldDone = true;
+          gallery.removeCurrent();
+          buzz(200, 120, now);
+        }
+      } else {
+        passHoldStart = 0;
       }
     }
 
@@ -948,7 +1058,7 @@ void loop() {
   in.idleMs = motion.idleMs(now);
   in.moving = in.idleMs < 300;
 
-  if (meetingMode || passMode) {
+  if (meetingMode || passMode || galleryMode) {
     // 会議モード / チケットモード: 顔は動かさず、寝もしない (画面を見られる状態を保つ)
     motion.touch(now);
     in = FaceInput{};
@@ -967,7 +1077,9 @@ void loop() {
              (unsigned)ESP.getFreeHeap(), dt);
     }
   }
+  if (galleryMode && pass.receiving()) gallery.markDirty();   // 受信待ちの案内を出し続ける
   if (pass.takeReceived()) {
+    if (galleryMode) gallery.markDirty();
     buzz(180, 60, now);
     printf("[pass] now %d passes, showing #%d\n", pass.count(), pass.current() + 1);
   }

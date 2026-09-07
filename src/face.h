@@ -326,12 +326,17 @@ private:
     }
 
     if (_blush > 0.05f) {
-      const uint16_t col = lerpColor(0x0000, COLOR_BLUSH, _blush);
+      // ほっぺ: 内側ほど濃い二重の楕円でふんわりさせる
+      const uint16_t outer = lerpColor(0x0000, COLOR_BLUSH, _blush * 0.55f);
+      const uint16_t inner = lerpColor(0x0000, COLOR_BLUSH, _blush);
       for (int i = -1; i <= 1; i += 2) {
-        _sprite.fillEllipse((int)(c + i * (EYE_OFFSET_X + 8) * s), (int)(c + (EYE_OFFSET_Y + EYE_RADIUS + 26) * s),
-                            (int)(28 * s), (int)(11 * s), col);
+        const int bx = (int)(c + i * (EYE_OFFSET_X + 14) * s);
+        const int by = (int)(c + (EYE_OFFSET_Y + EYE_RADIUS + 22) * s);
+        _sprite.fillEllipse(bx, by, (int)(34 * s), (int)(16 * s), outer);
+        _sprite.fillEllipse(bx, by, (int)(24 * s), (int)(10 * s), inner);
       }
     }
+    if (_mood == Mood::Happy && _mouthVisible < 0.02f) drawSmile(c, s);
 
     drawNotes(c, s);
     if (_mood == Mood::Sleep && _open < 0.15f) drawZzz(c, s);
@@ -343,8 +348,15 @@ private:
     const float pr = pupilR * s * _pupilScale * _breath;
 
     if (_mood == Mood::Happy || _mood == Mood::Music) {
-      // にっこり (^ ^)
-      drawCurve(cx, cy + er * 0.25f, er * 0.95f, er * 0.85f, 205, 335, 7.0f * s, COLOR_EYE_WHITE);
+      // にっこり (⌒ ⌒)。ふっくらした弧にして端を丸める
+      const float rx = er * 0.86f, ry = er * 1.02f;
+      const float w = 9.5f * s;
+      const float ay = cy + er * 0.34f;
+      drawCurve(cx, ay, rx, ry, 196, 344, w, COLOR_EYE_WHITE);
+      for (int e = 0; e < 2; ++e) {
+        const float th = (e ? 344.0f : 196.0f) * 0.01745329f;
+        _sprite.fillCircle((int)(cx + cosf(th) * rx), (int)(ay + sinf(th) * ry), (int)(w * 0.5f), COLOR_EYE_WHITE);
+      }
       return;
     }
     if (open < 0.07f) {
@@ -368,6 +380,34 @@ private:
     if (open > 0.35f) {
       const float hr = pr * 0.24f;
       _sprite.fillCircle((int)(px - pr * 0.36f), (int)(py - pr * 0.36f * open), (int)hr, COLOR_EYE_WHITE);
+    }
+  }
+
+  // 喜んだときの小さな口ときらきら
+  void drawSmile(float c, float s) {
+    const float t = clamp01(_blush);                    // 出入りに合わせて濃さと大きさを変える
+    if (t < 0.06f) return;
+    const uint16_t col = lerpColor(0x0000, COLOR_EYE_WHITE, t);
+    const float my = c + SMILE_OFFSET_Y * s;
+    const float rx = SMILE_HALF_W * s * (0.7f + 0.3f * t);
+    const float ry = SMILE_DEPTH * s * (0.7f + 0.3f * t);
+    const float w = 7.0f * s;
+    drawCurve(c, my, rx, ry, 20, 160, w, col);
+    for (int e = 0; e < 2; ++e) {                       // 端を丸める
+      const float th = (e ? 160.0f : 20.0f) * 0.01745329f;
+      _sprite.fillCircle((int)(c + cosf(th) * rx), (int)(my + sinf(th) * ry), (int)(w * 0.5f), col);
+    }
+    // きらきら (4 方向に伸びる小さな光)
+    for (int i = -1; i <= 1; i += 2) {
+      const float ph = _time * 3.4f + (i > 0 ? 1.7f : 0.0f);
+      const float k = 0.55f + 0.45f * sinf(ph);
+      const float sx = c + i * SPARKLE_X * s, sy = c - SPARKLE_Y * s;
+      const float r = SPARKLE_R * s * k * t;
+      if (r < 1.0f) continue;
+      const uint16_t sc = lerpColor(0x0000, COLOR_SPARKLE, t * k);
+      _sprite.drawWideLine(sx - r, sy, sx + r, sy, 3.0f * s, sc);
+      _sprite.drawWideLine(sx, sy - r, sx, sy + r, 3.0f * s, sc);
+      _sprite.fillCircle((int)sx, (int)sy, (int)(r * 0.32f), sc);
     }
   }
 

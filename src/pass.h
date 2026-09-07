@@ -41,6 +41,10 @@ public:
     if (_current >= _count) _current = 0;
   }
 
+  // POST /image を受け取る先 (ギャラリー)。main から渡す
+  using ImageSink = bool (*)(const uint8_t* data, size_t len, const char* name);
+  void setImageSink(ImageSink fn) { _imageSink = fn; }
+
   int count() const { return _count; }
   int current() const { return _current; }
   void next() { if (_count > 1) { _current = (_current + 1) % _count; _prefs.putUChar("cur", _current); } }
@@ -110,6 +114,11 @@ public:
 
   // ---------------- 受信 ----------------
   bool receiving() const { return _receiving; }
+  bool listening() const { return _state == State::Listening; }
+  bool apMode() const { return _apMode; }
+  String ipString() const { return _ip.toString(); }
+  String ssidName() const { return _apMode ? String(apSsid()) : WiFi.SSID(); }
+  static const char* apPassword() { return apPass(); }
   bool takeReceived() { bool r = _received; _received = false; return r; }
   const char* lastError() const { return _lastError; }
 
@@ -364,6 +373,23 @@ private:
     String title = urlParam(query, "title");
     String text, err;
     bool ok = false;
+    // ---- 画像として保存する経路 (POST /image) ----
+    if (path == "/image") {
+      const bool saved = _imageSink && got == contentLength && _imageSink(body, got, title.c_str());
+      free(body);
+      if (saved) {
+        _received = true;
+        _lastError[0] = 0;
+        puts("[pass] image stored");
+        respond(client, 200, "application/json", "{" + String("\"ok\":true,\"kind\":\"image\"}"));
+      } else {
+        snprintf(_lastError, sizeof(_lastError), "image save failed");
+        respond(client, 422, "application/json", "{\"ok\":false,\"error\":\"image save failed\"}");
+      }
+      client.stop();
+      _lastActivity = millis();
+      return;
+    }
     if (got == contentLength) {
       if ((got > 4 && body[0] == 'P' && body[1] == 'K') || contentType.indexOf("pkpass") >= 0 || contentType.indexOf("zip") >= 0) {
         ok = parsePkpass(body, got, title, text, err);
@@ -416,7 +442,8 @@ private:
       "<p>タイトル<br><input name=title style='width:100%'></p>"
       "<p>QR の内容<br><textarea name=text rows=6 style='width:100%'></textarea></p>"
       "<button>送る</button></form>"
-      "<p style='color:#888'>iPhone: Wallet のパスを共有 → ショートカットで POST /pass (.pkpass / スクリーンショット)</p>";
+      "<p style='color:#888'>iPhone: Wallet のパスを共有 → ショートカットで POST /pass (.pkpass / スクリーンショット)</p>"
+      "<p style='color:#888'>画像を全画面表示したいときは POST /image (JPEG / PNG, 466x466 推奨)</p>";
     respond(c, 200, "text/html", html);
   }
   static String urlParam(const String& q, const char* name) {
@@ -590,4 +617,5 @@ private:
   int _netIndex = 0, _lastStatus = -1, _round = 0;
   IPAddress _ip;
   char _lastError[64] = {0};
+  ImageSink _imageSink = nullptr;
 };
