@@ -194,6 +194,7 @@ static void loadSettings() {
   if (brightnessIndex >= sizeof(BRIGHTNESS_LEVELS)) brightnessIndex = DEFAULT_BRIGHTNESS_INDEX;
   autoSleepEnabled = prefs.getBool("asleep", true);
   meetingMode = prefs.getBool("meet", false);
+  clockFace.setStyle(prefs.getUChar("clk", CLOCKFACE_DEFAULT_STYLE));
 }
 
 static void saveOrientation() {
@@ -1022,6 +1023,10 @@ void loop() {
         statusUntil = now + STATUS_OVERLAY_MS;
         printf("[hid] key target -> %s\n", kb.keyTargetName());
       }
+    } else if (t.wasClicked() && clockMode) {
+      prefs.putUChar("clk", clockFace.nextStyle());   // 時計: タップで文字盤を切替 (アナログ ⇄ ゲージ)
+      buzz(100, 30, now);
+      printf("[clock] style %d\n", clockFace.style());
     } else if (t.wasClicked() && !onMute && !meetingMode && !passMode && !clockMode) in.tapped = true;
     if (t.isPressed() && !passMode) {
       pressed = true;

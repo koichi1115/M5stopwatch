@@ -291,6 +291,25 @@ constexpr int GALLERY_SIZE = 466;                    // 画像スプライトの
 // 11. 時計モード (外周のゲージで時、中央の数字で分)
 // ============================================================
 constexpr bool CLOCKFACE_ENABLED = true;
+constexpr uint8_t CLOCKFACE_DEFAULT_STYLE = 0;     // 0: アナログ (手書き数字) / 1: ゲージ。時計モードでタップすると切替
+// アナログ文字盤 (顔スプライト 380 基準。中心からの距離 [px])
+constexpr float CLOCKFACE_TICK_R = 184.0f;         // 目盛りの外端
+constexpr float CLOCKFACE_TICK_LEN = 12.0f;        // 時の目盛りの長さ
+constexpr float CLOCKFACE_DIGIT_OUTER = 166.0f;    // 手書き数字の外側の縁を揃える円
+constexpr float CLOCKFACE_DIGIT_H = 50.0f;         // 手書き数字の高さ
+constexpr float CLOCKFACE_DIGIT_GAP = 0.04f;       // 2 桁の数字の間隔 (高さに対する比)
+constexpr float CLOCKFACE_DAY_Y = 70.0f;           // 日付の位置 (中心から下へ)
+constexpr float CLOCKFACE_DAY_H = 26.0f;           // 日付の数字の高さ
+constexpr float CLOCKFACE_HOUR_LEN = 92.0f;        // 時針
+constexpr float CLOCKFACE_MIN_LEN = 136.0f;        // 分針
+constexpr float CLOCKFACE_SEC_LEN = 150.0f;        // 秒針
+constexpr float CLOCKFACE_SEC_TAIL = 28.0f;        // 秒針の反対側
+constexpr uint16_t COLOR_CLOCK_DIGIT = 0xFFFF;     // 手書き数字
+constexpr uint16_t COLOR_CLOCK_HAND = 0xEF7D;      // 時針・分針
+constexpr uint16_t COLOR_CLOCK_SECOND = 0xFD20;    // 秒針 (オレンジ)
+constexpr uint16_t COLOR_CLOCK_TICK = 0xBDF7;      // 時の目盛り
+constexpr uint16_t COLOR_CLOCK_OFF_TICK = 0x4A69;  // 分の目盛り
+// ゲージ文字盤
 constexpr float CLOCKFACE_GAUGE_R = 184.0f;        // 外周ゲージの外側の半径 (顔スプライト 380 基準)
 constexpr float CLOCKFACE_GAUGE_THICK = 26.0f;     // ゲージの太さ
 constexpr float CLOCKFACE_GAUGE_GAP_DEG = 2.6f;    // 目盛りの間の隙間 [度]
