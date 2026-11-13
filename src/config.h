@@ -279,6 +279,10 @@ constexpr bool PASS_DEBUG_RECEIVE_ON_BOOT = false;   // 開発用: 起動 3 秒�
 // ============================================================
 // 10. ギャラリー (円形画面に画像を表示)
 // ============================================================
+constexpr bool BLACKHOLE_ENABLED = true;               // ブラックホールモード (ギャラリーの次)
+constexpr uint32_t BLACKHOLE_PERIOD_MS = 4000;          // 円盤の内縁が 1 周する時間 (外側ほど遅い)
+constexpr int BLACKHOLE_DRIFT_PX = 4;                   // 焼き付き対策に絵をずらす幅 [px]
+constexpr uint32_t BLACKHOLE_DRIFT_PERIOD_MS = 240000;  // そのずらしが一巡する時間
 constexpr bool GALLERY_ENABLED = true;
 constexpr const char* GALLERY_MOUNT_POINT = "/fs";
 constexpr const char* GALLERY_DIR = "/gallery";

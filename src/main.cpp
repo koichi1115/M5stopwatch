@@ -31,6 +31,7 @@
 #include "pass.h"
 #include "gallery.h"
 #include "clock.h"
+#include "blackhole.h"
 
 #include <nvs.h>
 #include <esp_system.h>
@@ -171,6 +172,8 @@ static Gallery gallery;
 static ClockFace clockFace;
 static bool clockMode = false;        // 時計モード
 static bool galleryMode = false;      // 円形画面いっぱいに画像を出すモード
+static BlackHole blackHole;
+static bool blackholeMode = false;    // ブラックホールモード
 static bool passMode = false;
 static uint32_t passHoldStart = 0;     // QR 長押し (削除) の開始時刻
 static bool passHoldDone = false;
@@ -548,7 +551,7 @@ static void drawStatus(uint32_t now) {
   sp.drawString(line, x, y); y += 16;
   snprintf(line, sizeof(line), "ble %s  mic %s%s", !HID_ENABLED ? "off" : (kb.connected() ? "connected" : "advertising"),
            micMuted ? "MUTED" : "on",
-           meetingMode ? "  MEETING" : (passMode ? "  PASS" : (galleryMode ? "  GALLERY" : (clockMode ? "  CLOCK" : ""))));
+           meetingMode ? "  MEETING" : (passMode ? "  PASS" : (galleryMode ? "  GALLERY" : (clockMode ? "  CLOCK" : (blackholeMode ? "  BLACKHOLE" : "")))));
   sp.drawString(line, x, y);
 
   // 電池アーク (下部, 左から右へ伸びる)
@@ -617,6 +620,9 @@ static void render(uint32_t now) {
   if (clockMode) {
     face.sprite().fillScreen(COLOR_TRANSPARENT);
     clockFace.draw(face.sprite(), face.sprite().width() / 2.0f, now);
+  } else if (blackholeMode) {
+    face.sprite().fillScreen(COLOR_TRANSPARENT);
+    blackHole.draw(face.sprite(), now);
   } else if (passMode) {
     face.sprite().fillScreen(COLOR_TRANSPARENT);
     pass.draw(face.sprite(), face.sprite().width() / 2.0f, now);
@@ -633,7 +639,7 @@ static void render(uint32_t now) {
 
   if (out != &screen) M5.Display.startWrite();
   out->fillScreen(TFT_BLACK);
-  if (!meetingMode && !passMode && !clockMode && styleIndex == STYLE_MAKKURO) drawFur(angle);
+  if (!meetingMode && !passMode && !clockMode && !blackholeMode && styleIndex == STYLE_MAKKURO) drawFur(angle);
   if (FACE_ANTIALIAS) face.sprite().pushRotatedWithAA(out, angle, COLOR_TRANSPARENT);
   else face.sprite().pushRotateZoom(out, screenW / 2.0f + DISPLAY_OFFSET_X, screenH / 2.0f + DISPLAY_OFFSET_Y, angle, 1.0f, 1.0f, COLOR_TRANSPARENT);
   if (out == &screen) screen.pushSprite(0, 0);
@@ -652,11 +658,15 @@ static void cycleMode(uint32_t now) {
     puts("[mode] pass off");
     if (GALLERY_ENABLED) { galleryMode = true; gallery.markDirty(); puts("[mode] gallery ON"); }
     else pass.stopReceive();
-  } else if (galleryMode) {          // ギャラリー → 通常
+  } else if (galleryMode) {          // ギャラリー → ブラックホール → 通常
     galleryMode = false;
     clockMode = false;
     pass.stopReceive();
     puts("[mode] gallery off");
+    if (BLACKHOLE_ENABLED) { blackholeMode = true; puts("[mode] blackhole ON"); }
+  } else if (blackholeMode) {
+    blackholeMode = false;
+    puts("[mode] blackhole off");
   } else if (clockMode) {            // 時計 → 会議
     clockMode = false;
     setMeetingMode(true, now);
@@ -946,6 +956,7 @@ void loop() {
         if (passMode) { passMode = false; pass.stopReceive(); passHoldStart = 0; buzz(120, 40, now); puts("[mode] pass off"); }
         else if (galleryMode) { galleryMode = false; pass.stopReceive(); buzz(120, 40, now); puts("[mode] gallery off"); }
         else if (clockMode) { clockMode = false; buzz(120, 40, now); puts("[mode] clock off"); }
+        else if (blackholeMode) { blackholeMode = false; buzz(120, 40, now); puts("[mode] blackhole off"); }
         else if (meetingMode) setMeetingMode(false, now);
         else swipeDone = false;   // すでに通常モード
       } else if (galleryMode) {
@@ -958,6 +969,8 @@ void loop() {
         if (horizontal) { if (flx < 0) pass.next(); else pass.prev(); }
         else swipeDone = false;
         passHoldStart = 0;
+      } else if (blackholeMode) {
+        swipeDone = false;    // ブラックホール: 上スワイプ以外は何もしない
       } else if (SWIPE_ENTERS_MODES && vertical) {
         muteArmed = false;
         setMeetingMode(true, now);   // 下スワイプ: 会議モードへ
@@ -1027,7 +1040,7 @@ void loop() {
       prefs.putUChar("clk", clockFace.nextStyle());   // 時計: タップで文字盤を切替 (アナログ ⇄ ゲージ)
       buzz(100, 30, now);
       printf("[clock] style %d\n", clockFace.style());
-    } else if (t.wasClicked() && !onMute && !meetingMode && !passMode && !clockMode) in.tapped = true;
+    } else if (t.wasClicked() && !onMute && !meetingMode && !passMode && !clockMode && !blackholeMode) in.tapped = true;
     if (t.isPressed() && !passMode) {
       pressed = true;
       motion.touch(now);
@@ -1077,7 +1090,7 @@ void loop() {
   in.idleMs = motion.idleMs(now);
   in.moving = in.idleMs < 300;
 
-  if (meetingMode || passMode || galleryMode || clockMode) {
+  if (meetingMode || passMode || galleryMode || clockMode || blackholeMode) {
     // 会議モード / チケットモード: 顔は動かさず、寝もしない (画面を見られる状態を保つ)
     motion.touch(now);
     in = FaceInput{};
