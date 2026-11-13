@@ -13,8 +13,9 @@ import argparse, glob, os, subprocess, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ESPTOOL = os.path.expanduser('~/.platformio/packages/tool-esptoolpy/esptool.py')
-PIO = os.path.expanduser('~/AppData/Roaming/Python/Python313/Scripts/pio.exe')
-if not os.path.exists(PIO): PIO = 'pio'
+# pio.exe (pip が作る起動用の exe) は Windows のアプリ制御ポリシーで実行を止められることがある
+# (WinError 4551)。署名済みの python.exe からモジュールとして起動すれば通るので、そちらを使う
+PIO = [sys.executable, '-m', 'platformio']
 
 ap = argparse.ArgumentParser()
 ap.add_argument('env', nargs='?', default='m5stopwatch')
@@ -66,7 +67,7 @@ def port_free(port):
 
 if a.build:
     print(f'== build {a.env}')
-    r = subprocess.run([PIO, 'run', '-e', a.env], cwd=ROOT)
+    r = subprocess.run(PIO + ['run', '-e', a.env], cwd=ROOT)
     if r.returncode != 0: sys.exit(r.returncode)
 
 build = os.path.join(ROOT, '.pio', 'build', a.env)
