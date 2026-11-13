@@ -283,6 +283,13 @@ constexpr bool BLACKHOLE_ENABLED = true;               // ブラックホール�
 constexpr uint32_t BLACKHOLE_PERIOD_MS = 4000;          // 円盤の内縁が 1 周する時間 (外側ほど遅い)
 constexpr int BLACKHOLE_DRIFT_PX = 4;                   // 焼き付き対策に絵をずらす幅 [px]
 constexpr uint32_t BLACKHOLE_DRIFT_PERIOD_MS = 240000;  // そのずらしが一巡する時間
+constexpr int BLACKHOLE_MAX_BLOBS = 6;                  // 同時に落ちていける塊の数 (タップで投げ込む)
+constexpr float BLACKHOLE_FALL_SPEED = 14.0f;           // 塊が落ちる速さ [リング/秒] (外縁から内縁まで 64 リング)
+constexpr int BLACKHOLE_DROP_SEARCH_PX = 36;            // タップ位置の近くで円盤を探す範囲
+constexpr uint32_t BLACKHOLE_COOL_AFTER_MS = 30000;     // これだけ動かさないと冷え始める
+constexpr uint32_t BLACKHOLE_COOL_MS = 120000;          // 冷えきるまでの時間
+constexpr float BLACKHOLE_COLD_LEVEL = 0.22f;           // 冷えきったときの明るさ (1 = 熱い)
+constexpr float BLACKHOLE_COLD_SPEED = 0.35f;           // 冷えきったときの回転の速さ (1 = 通常)
 constexpr bool GALLERY_ENABLED = true;
 constexpr const char* GALLERY_MOUNT_POINT = "/fs";
 constexpr const char* GALLERY_DIR = "/gallery";

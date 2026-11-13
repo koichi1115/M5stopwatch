@@ -128,10 +128,14 @@ def texture():
     return (np.clip(tex, 0, 1) * 255).astype(np.uint8)
 
 
-def palette():
-    # 明るさ 0..255 → 色。暗い赤 → オレンジ → 黄 → 白 (黒体の色に近い順)
-    keys = [(0, (0, 0, 0)), (40, (90, 10, 0)), (110, (220, 70, 5)), (175, (255, 165, 40)),
-            (225, (255, 225, 140)), (255, (255, 255, 245))]
+DISK_KEYS = [(0, (0, 0, 0)), (40, (90, 10, 0)), (110, (220, 70, 5)), (175, (255, 165, 40)),
+             (225, (255, 225, 140)), (255, (255, 255, 245))]
+# 投げ込んだ塊の色。円盤より熱いプラズマとして青白く光らせ、円盤の上でも見分けられるようにする
+HOT_KEYS = [(0, (0, 0, 0)), (90, (30, 60, 220)), (170, (110, 180, 255)), (225, (200, 235, 255)), (255, (255, 255, 255))]
+
+
+def palette(keys=DISK_KEYS):
+    # 明るさ 0..255 → 色。円盤は 暗い赤 → オレンジ → 黄 → 白 (黒体の色に近い順)
     out = []
     for v in range(256):
         for (v0, c0), (v1, c1) in zip(keys, keys[1:]):
@@ -200,6 +204,10 @@ def write_header(disk, bri, star, tex, pal):
     L.append("  " + ",".join(str(v) for v in angular_speed()) + ",")
     L += ["};", "// 明るさ → 色 (RGB565)", "static const uint16_t BH_PALETTE[256] = {"]
     p = [rgb565(c) for c in pal]
+    for i in range(0, 256, 16):
+        L.append("  " + ",".join(f"0x{v:04x}" for v in p[i:i + 16]) + ",")
+    L += ["};", "// 投げ込んだ塊の明るさ → 色 (RGB565)", "static const uint16_t BH_HOT_PALETTE[256] = {"]
+    p = [rgb565(c) for c in palette(HOT_KEYS)]
     for i in range(0, 256, 16):
         L.append("  " + ",".join(f"0x{v:04x}" for v in p[i:i + 16]) + ",")
     L += ["};", ""]

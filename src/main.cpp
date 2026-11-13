@@ -622,7 +622,7 @@ static void render(uint32_t now) {
     clockFace.draw(face.sprite(), face.sprite().width() / 2.0f, now);
   } else if (blackholeMode) {
     face.sprite().fillScreen(COLOR_TRANSPARENT);
-    blackHole.draw(face.sprite(), now);
+    blackHole.draw(face.sprite(), now, motion.idleMs(now));
   } else if (passMode) {
     face.sprite().fillScreen(COLOR_TRANSPARENT);
     pass.draw(face.sprite(), face.sprite().width() / 2.0f, now);
@@ -1040,6 +1040,9 @@ void loop() {
       prefs.putUChar("clk", clockFace.nextStyle());   // 時計: タップで文字盤を切替 (アナログ ⇄ ゲージ)
       buzz(100, 30, now);
       printf("[clock] style %d\n", clockFace.style());
+    } else if (t.wasClicked() && blackholeMode) {
+      blackHole.drop(lx, ly);          // ブラックホール: 触った所に光の塊を投げ込む
+      buzz(60, 20, now);
     } else if (t.wasClicked() && !onMute && !meetingMode && !passMode && !clockMode && !blackholeMode) in.tapped = true;
     if (t.isPressed() && !passMode) {
       pressed = true;
@@ -1092,7 +1095,8 @@ void loop() {
 
   if (meetingMode || passMode || galleryMode || clockMode || blackholeMode) {
     // 会議モード / チケットモード: 顔は動かさず、寝もしない (画面を見られる状態を保つ)
-    motion.touch(now);
+    // ブラックホールは放っておくと冷える演出に動きの記録を使うので、ここでは触らない
+    if (!blackholeMode) motion.touch(now);
     in = FaceInput{};
     in.dt = dt; in.now = now; in.autoSleepEnabled = false; in.moving = true;
   }
@@ -1125,6 +1129,7 @@ void loop() {
   face.update(in);
   face.updateBot(in);
   if (face.takeChomp()) buzz(200, 50, now);   // かじった
+  if (blackHole.takeGulp()) buzz(220, 70, now);   // 投げ込んだ塊が吸い込まれた
 
   // ---- 電源まわり ----
   applyBrightness();
