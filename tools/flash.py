@@ -87,8 +87,9 @@ for attempt in range(1, 4):
     kill_stale()
     if not port_free(port):
         time.sleep(2)
+    # 綴りは下線区切り: esptool 4.x はこれしか受け付けず、5.x も旧名として受け付ける
     cmd = [sys.executable, ESPTOOL, '--chip', 'esp32s3', '--port', port, '--baud', '921600',
-           '--before', 'default-reset', '--after', 'hard-reset', 'write_flash', '-z'] + parts
+           '--before', 'default_reset', '--after', 'hard_reset', 'write_flash', '-z'] + parts
     print(f'== esptool attempt {attempt}')
     # esptool の進捗バーは Unicode。日本語 Windows の cp932 では出力時に落ちるので UTF-8 を強制する
     env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUTF8='1')
